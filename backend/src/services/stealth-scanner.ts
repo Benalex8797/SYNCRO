@@ -93,13 +93,17 @@ export class StealthScanner {
       ephemeralPubkey = fromTx;
     }
 
-    let stealthAddress: string;
+    let stealthAddresses: string[];
     try {
-      stealthAddress = detectStealthDestination(
-        keys.viewPrivateKey,
-        keys.spendPublicKey,
-        ephemeralPubkey,
-      );
+      if (ephemeralPubkey.length === 64) {
+        stealthAddresses = ['02', '03'].map((prefix) =>
+          detectStealthDestination(keys.viewPrivateKey, keys.spendPublicKey, prefix + ephemeralPubkey),
+        );
+      } else {
+        stealthAddresses = [
+          detectStealthDestination(keys.viewPrivateKey, keys.spendPublicKey, ephemeralPubkey),
+        ];
+      }
     } catch (err) {
       logger.warn('Stealth destination derivation failed', {
         txHash: tx.hash,
@@ -110,9 +114,11 @@ export class StealthScanner {
 
     const ops = tx._embedded?.operations ?? [];
     const paymentOp = ops.find(
-      (op) => op.type === 'payment' && op.destination === stealthAddress,
+      (op) => op.type === 'payment' && stealthAddresses.includes(op.destination ?? ''),
     );
     if (!paymentOp) return null;
+
+    const stealthAddress = paymentOp.destination!;
 
     return {
       stealthAddress,
