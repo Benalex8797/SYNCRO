@@ -1,10 +1,39 @@
 import { Router, Response } from 'express';
 import { authenticate, AuthenticatedRequest } from '../middleware/auth';
 import { paymentChannelService } from '../services/payment-channel-service';
+import { channelStateService } from '../services/channel-state';
 import logger from '../config/logger';
 
 const router = Router();
 router.use(authenticate);
+
+router.get('/preferences', async (req: AuthenticatedRequest, res: Response) => {
+  try {
+    const prefs = await channelStateService.getChannelPreferences(req.user!.id);
+    return res.json(prefs);
+  } catch (error) {
+    logger.error('Failed to get channel preferences', error);
+    return res.status(500).json({ error: 'Failed to get channel preferences' });
+  }
+});
+
+router.patch('/preferences', async (req: AuthenticatedRequest, res: Response) => {
+  try {
+    const { autoTopUp, autoTopUpAmount } = req.body as {
+      autoTopUp?: boolean;
+      autoTopUpAmount?: number | null;
+    };
+    await channelStateService.setChannelPreferences(req.user!.id, {
+      autoTopUp,
+      autoTopUpAmount,
+    });
+    const prefs = await channelStateService.getChannelPreferences(req.user!.id);
+    return res.json(prefs);
+  } catch (error) {
+    logger.error('Failed to update channel preferences', error);
+    return res.status(500).json({ error: 'Failed to update channel preferences' });
+  }
+});
 
 router.get('/', async (req: AuthenticatedRequest, res: Response) => {
   try {

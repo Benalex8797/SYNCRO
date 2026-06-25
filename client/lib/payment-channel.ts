@@ -109,3 +109,29 @@ export async function getChannel(channelId: string): Promise<PaymentChannel> {
 export function getPersistedChannels(): PaymentChannel[] {
   return loadPersistedChannels();
 }
+
+export interface ChannelPreferences {
+  autoTopUp: boolean;
+  autoTopUpAmount: number | null;
+}
+
+export async function getChannelPreferences(): Promise<ChannelPreferences> {
+  const res = await fetch(`${API_BASE}/api/payment-channels/preferences`, {
+    credentials: 'include',
+  });
+  if (!res.ok) throw new Error('Failed to fetch channel preferences');
+  return res.json();
+}
+
+export async function updateChannelPreferences(
+  prefs: Partial<ChannelPreferences>,
+): Promise<ChannelPreferences> {
+  const res = await fetch(`${API_BASE}/api/payment-channels/preferences`, {
+    method: 'PATCH',
+    credentials: 'include',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(prefs),
+  });
+  if (!res.ok) throw new Error('Failed to update channel preferences');
+  return res.json();
+}
