@@ -11,6 +11,13 @@ function groupOrder(): bigint {
 const G = RistrettoPoint.hashToCurve(DOMAIN_PREFIX + '-G');
 const H = RistrettoPoint.hashToCurve(DOMAIN_PREFIX + '-H');
 
+/**
+ * Pedersen commitment to a value.
+ *
+ * @interface PedersenCommitment
+ * @property {string} commitment - Commitment point (hex-encoded Ristretto)
+ * @property {string} blindingFactor - Secret blinding factor (hex scalar)
+ */
 export interface PedersenCommitment {
   commitment: string;
   blindingFactor: string;
@@ -33,6 +40,12 @@ function scalarToHex(scalar: bigint): string {
   return hex;
 }
 
+/**
+ * Convert hex string to scalar (bigint) modulo group order.
+ *
+ * @param {string} hex - Hex-encoded scalar
+ * @returns {bigint} Scalar value modulo group order
+ */
 export function hexToScalar(hex: string): bigint {
   return BigInt('0x' + hex) % groupOrder();
 }
@@ -62,6 +75,27 @@ function modGroupOrder(n: bigint): bigint {
   return ((n % L) + L) % L;
 }
 
+/**
+ * Create a Pedersen commitment to a value.
+ *
+ * Creates a commitment C = v*G + r*H where:
+ * - v is the value
+ * - r is the (random or provided) blinding factor
+ * - G, H are independent Ristretto generators
+ *
+ * The commitment is computationally hiding (reveals no info about v)
+ * and perfectly binding (can't prove different value).
+ *
+ * @param {bigint} value - Value to commit to (amount in cents)
+ * @param {bigint} [blindingFactor] - Blinding factor (random if omitted)
+ * @returns {PedersenCommitment} Commitment and blinding factor
+ *
+ * @example
+ * ```typescript
+ * const commitment = commit(1500n); // $15.00
+ * // { commitment: "...", blindingFactor: "..." }
+ * ```
+ */
 export function commit(value: bigint, blindingFactor?: bigint): PedersenCommitment {
   const v = modGroupOrder(value);
   const r = blindingFactor !== undefined ? modGroupOrder(blindingFactor) : randomScalar();
@@ -72,6 +106,21 @@ export function commit(value: bigint, blindingFactor?: bigint): PedersenCommitme
   };
 }
 
+/**
+ * Verify a Pedersen commitment.
+ *
+ * Checks that v*G + r*H == commitment. Returns true if valid, false otherwise.
+ *
+ * @param {bigint} value - Claimed value
+ * @param {bigint} blindingFactor - Blinding factor (as bigint or hex scalar)
+ * @param {string} commitment - Original commitment (hex point)
+ * @returns {boolean} True if commitment is valid, false otherwise
+ *
+ * @example
+ * ```typescript
+ * const isValid = verify(1500n, blindingFactor, commitment.commitment);
+ * ```
+ */
 export function verify(value: bigint, blindingFactor: bigint, commitment: string): boolean {
   try {
     const v = modGroupOrder(value);
@@ -83,6 +132,24 @@ export function verify(value: bigint, blindingFactor: bigint, commitment: string
   }
 }
 
+/**
+ * Create a commitment to an event.
+ *
+ * Hashes the event type and data, then commits to the hash.
+ * Useful for proving events occurred without revealing details.
+ *
+ * @param {string} eventType - Type of event (e.g., "subscription_payment")
+ * @param {string} eventData - Event data (e.g., JSON string)
+ * @returns {PedersenCommitment} Event commitment
+ *
+ * @example
+ * ```typescript
+ * const commitment = createEventCommitment(
+ *   'subscription_payment',
+ *   '{"amount": 1500, "date": "2024-01-01"}'
+ * );
+ * ```
+ */
 export function createEventCommitment(
   eventType: string,
   eventData: string,
@@ -91,6 +158,15 @@ export function createEventCommitment(
   return commit(v);
 }
 
+/**
+ * Verify an event commitment.
+ *
+ * @param {string} eventType - Type of event
+ * @param {string} eventData - Event data
+ * @param {string} blindingFactor - Blinding factor (hex)
+ * @param {string} commitment - Original commitment (hex point)
+ * @returns {boolean} True if commitment is valid
+ */
 export function verifyEventCommitment(
   eventType: string,
   eventData: string,
@@ -101,6 +177,13 @@ export function verifyEventCommitment(
   return verify(v, hexToScalar(blindingFactor), commitment);
 }
 
+/**
+ * Compute hash of an event.
+ *
+ * @param {string} eventType - Type of event
+ * @param {string} eventData - Event data
+ * @returns {string} SHA-256 hash (hex)
+ */
 export function computeEventHash(eventType: string, eventData: string): string {
   const hash = sha256(
     new TextEncoder().encode([DOMAIN_PREFIX, 'event', eventType, eventData].join('||')),
