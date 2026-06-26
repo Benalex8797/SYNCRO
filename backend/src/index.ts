@@ -46,6 +46,7 @@ import mfaRoutes from './routes/mfa';
 import pushNotificationRoutes from './routes/push-notifications';
 import walletRoutes from './routes/wallet';
 import keyRotationRoutes from './routes/key-rotation';
+import privacyRoutes from './routes/privacy';
 import emailRescanRoutes from './routes/email-rescan';
 import gmailRouter from './routes/integrations/gmail'
 import outlookRouter from './routes/integrations/outlook'
@@ -68,6 +69,7 @@ import { createAdminLimiter, RateLimiterFactory } from './middleware/rate-limit-
 import { scheduleAutoResume } from './jobs/auto-resume';
 import { startSettlementBatchJob } from './jobs/settlement-batch-job';
 import { startChannelMonitorJob } from './jobs/channel-monitor-job';
+import { startChannelSettlementJob } from './jobs/channel-settlement-job';
 import { startJobAlertMonitor, stopJobAlertMonitor } from './jobs/job-alert-monitor';
 import giftCardLedgerRoutes from './routes/gift-card-ledger';
 import notificationDeadLetterRoutes from './routes/notification-dead-letter';
@@ -78,6 +80,7 @@ import userPreferencesRoutes from './routes/user-preferences';
 import reminderSettingsRoutes from './routes/reminder-settings';
 import { blockchainReconciliationService } from './services/blockchain-reconciliation-service';
 import paymentsRoutes from './routes/payments';
+import paystackWebhookRoutes from './routes/paystack-webhook';
 import agentWalletsRoutes from './routes/agent-wallets';
 import paymentChannelsRoutes from './routes/payment-channels';
 import { errorHandler } from './middleware/errorHandler';
@@ -185,6 +188,7 @@ app.use('/api/integrations/email', authenticate, emailRescanRoutes);
 // themselves within csp-violations.ts.
 app.use('/api/csp-violations', cspViolationsRoutes);
 app.use('/api/webhooks', webhookRoutes);
+app.use('/api/webhooks/paystack', paystackWebhookRoutes);
 app.use('/api/compliance', complianceRoutes);
 app.use('/api/tags', tagsRoutes);
 app.use('/api/user', userRoutes);
@@ -193,6 +197,7 @@ app.use('/api/mfa', mfaRoutes);
 app.use('/api/notifications/push', pushNotificationRoutes);
 app.use('/api/wallet', walletRoutes);
 app.use('/api/key-rotation', keyRotationRoutes);
+app.use('/api/privacy', privacyRoutes);
 app.use('/api/notifications/dead-letter', notificationDeadLetterRoutes);
 app.use('/api/exchange-rates', createExchangeRatesRouter(exchangeRateService));
 app.use('/api/gift-card-ledger', giftCardLedgerRoutes);
@@ -485,6 +490,7 @@ const server = app.listen(PORT, async () => {
   scheduleAutoResume();
   startSettlementBatchJob();
   startChannelMonitorJob();
+  startChannelSettlementJob();
   startJobAlertMonitor();
 
   telegramCommandService.init();

@@ -2,10 +2,14 @@
 //!
 //! Scheme: Fiat-Shamir commitment proof using SHA-256.
 //!
+//! Domain tags follow the `syncro:payment:*` convention shared with
+//! [`commitment::compute_commitment`] and [`nullifier::compute_nullifier`]
+//! (see `commitment.rs` / `nullifier.rs`).
+//!
 //! The prover holds a secret `w` and derives an ephemeral `proof_key`:
-//!   proof_key = SHA256("zkpay-v1\0…" || w)          (off-chain, never revealed)
-//!   commitment = SHA256(COMMIT_DOMAIN || proof_key)   (public, on-chain)
-//!   nullifier  = SHA256(NULL_DOMAIN  || proof_key)    (public, on-chain)
+//!   proof_key = SHA256("syncro:payment:v1" || w)     (off-chain, never revealed)
+//!   commitment = SHA256(COMMIT_DOMAIN || proof_key)  (public, on-chain)
+//!   nullifier  = SHA256(NULL_DOMAIN  || proof_key)   (public, on-chain)
 //!
 //! Proof construction (64 bytes):
 //!   params  = amount_threshold(16 BE) || time_start(8 BE) || time_end(8 BE)  → padded to 32 B
@@ -26,11 +30,12 @@
 use soroban_sdk::{Bytes, BytesN, Env};
 
 // 32-byte domain separators (tag || zero-padding)
+// Domain tag convention: "syncro:payment:*" (matches commitment.rs & nullifier.rs)
 const COMMIT_DOMAIN: &[u8; 32] =
-    b"zkpay-commit\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00";
+    b"syncro:payment:commit\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00";
 
 const NULL_DOMAIN: &[u8; 32] =
-    b"zkpay-null\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00";
+    b"syncro:payment:nullifier\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00";
 
 /// Verify a ZK payment proof.
 ///

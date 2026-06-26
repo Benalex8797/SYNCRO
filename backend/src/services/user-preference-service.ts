@@ -27,6 +27,7 @@ export class UserPreferenceService {
         locale: 'en-US',
         calendar_sync_enabled: false,
         calendar_export_reminders: true,
+        preferred_gift_card_provider: 'atomic_wallet',
         privacy_mode_enabled: false,
     };
 
