@@ -59,6 +59,9 @@ export const envSchema = z.object({
   STRIPE_SECRET_KEY: z.string().optional(),
   STRIPE_WEBHOOK_SECRET: z.string().optional(),
 
+  // Paystack (optional — required for African market users: NG, GH, ZA, KE)
+  PAYSTACK_SECRET_KEY: z.string().optional(),
+
   // Google / Gmail (optional)
   GOOGLE_CLIENT_ID: z.string().optional(),
   GOOGLE_CLIENT_SECRET: z.string().optional(),

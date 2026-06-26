@@ -1,8 +1,9 @@
 #![no_std]
 
-use soroban_sdk::{contract, contractimpl, contracttype, Bytes, BytesN, Env, Map};
+use soroban_sdk::{contract, contractimpl, contracttype, Bytes, BytesN, Env};
 
 pub mod commitment;
+pub mod nullifier;
 
 #[contracttype]
 #[derive(Clone)]
@@ -39,35 +40,13 @@ impl ZkPaymentVerifier {
             return false;
         }
 
-        let nullifier = commitment::compute_nullifier(&env, &blinding_factor, &service_id);
-
-        let mut nullifiers: Map<BytesN<32>, bool> = env
-            .storage()
-            .persistent()
-            .get(&DataKey::Nullifiers)
-            .unwrap_or(Map::new(&env));
-
-        if nullifiers.contains_key(nullifier.clone()) {
-            return false;
-        }
-
-        nullifiers.set(nullifier, true);
-        env.storage()
-            .persistent()
-            .set(&DataKey::Nullifiers, &nullifiers);
-
-        true
+        let computed_nullifier = nullifier::compute_nullifier(&env, &blinding_factor, &service_id);
+        nullifier::record(&env, computed_nullifier)
     }
 
     /// Check if a nullifier has already been used.
     pub fn is_nullifier_used(env: Env, nullifier: BytesN<32>) -> bool {
-        let nullifiers: Map<BytesN<32>, bool> = env
-            .storage()
-            .persistent()
-            .get(&DataKey::Nullifiers)
-            .unwrap_or(Map::new(&env));
-
-        nullifiers.contains_key(nullifier)
+        nullifier::is_used(&env, &nullifier)
     }
 }
 

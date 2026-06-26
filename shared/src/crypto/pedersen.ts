@@ -8,17 +8,8 @@ function groupOrder(): bigint {
   return RISTRETTO_ORDER;
 }
 
-function hashToRistrettoPoint(seed: string) {
-  const h1 = sha256(new TextEncoder().encode(seed));
-  const h2 = sha256(h1);
-  const combined = new Uint8Array(64);
-  combined.set(h1, 0);
-  combined.set(h2, 32);
-  return RistrettoPoint.hashToCurve(combined);
-}
-
-const G = hashToRistrettoPoint(DOMAIN_PREFIX + '-G');
-const H = hashToRistrettoPoint(DOMAIN_PREFIX + '-H');
+const G = RistrettoPoint.hashToCurve(sha256(new TextEncoder().encode(DOMAIN_PREFIX + '-G')));
+const H = RistrettoPoint.hashToCurve(sha256(new TextEncoder().encode(DOMAIN_PREFIX + '-H')));
 
 export interface PedersenCommitment {
   commitment: string;

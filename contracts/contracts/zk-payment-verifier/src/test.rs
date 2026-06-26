@@ -137,7 +137,7 @@ fn test_is_nullifier_used() {
     let service_id = Bytes::from_slice(&env, b"service_netflix");
     let blinding_factor = BytesN::from_array(&env, &[42u8; 32]);
 
-    let nullifier = commitment::compute_nullifier(&env, &blinding_factor, &service_id);
+    let nullifier = nullifier::compute_nullifier(&env, &blinding_factor, &service_id);
 
     assert!(!client.is_nullifier_used(&nullifier));
 

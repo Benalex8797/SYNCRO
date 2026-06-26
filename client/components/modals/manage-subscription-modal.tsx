@@ -20,10 +20,9 @@ import { NotesEditor } from "@/components/ui/notes-editor"
 import { TagInput } from "@/components/ui/tag-input"
 import { useTags } from "@/hooks/use-tags"
 import { apiPost } from "@/lib/api"
-import {
-  getGiftCardProviderFromSubscription,
-  openAtomicWalletGiftCard,
-} from "@/lib/atomic-wallet"
+import { getGiftCardProviderFromSubscription } from "@/lib/atomic-wallet"
+import { fetchUserPreferences } from "@/lib/api/user-preferences"
+import { getGiftCardProvider } from "@/lib/gift-card-providers"
 
 const CANCEL_LINKS: Record<string, string> = {
   "ChatGPT Plus": "https://platform.openai.com/account/billing/overview",
@@ -86,6 +85,22 @@ export default function ManageSubscriptionModal({
   const giftCardProvider = getGiftCardProviderFromSubscription(subscription)
   const giftCardAmount = Number(subscription.price || 0)
   const canBuyGiftCard = Boolean(giftCardProvider && giftCardAmount > 0)
+
+  const handleBuyGiftCard = async () => {
+    if (!giftCardProvider) return
+    let preferredProviderId: string | undefined
+    try {
+      const prefs = await fetchUserPreferences()
+      preferredProviderId = prefs.preferred_gift_card_provider
+    } catch {
+      // Fall back to the default (Atomic Wallet) if preferences can't be loaded.
+    }
+    const purchaseProvider = getGiftCardProvider(preferredProviderId)
+    const url = purchaseProvider.generatePurchaseUrl(giftCardAmount, giftCardProvider)
+    if (typeof window !== "undefined") {
+      window.location.href = url
+    }
+  }
 
   const handleDelete = () => {
     onDelete()
@@ -323,7 +338,7 @@ export default function ManageSubscriptionModal({
 
               {canBuyGiftCard && (
                 <button
-                  onClick={() => openAtomicWalletGiftCard(giftCardAmount, giftCardProvider!)}
+                  onClick={handleBuyGiftCard}
                   className="w-full flex items-center justify-center gap-2 px-4 py-3 bg-[#007A5C] text-white rounded-lg font-semibold hover:bg-[#007A5C]/90 transition-colors"
                 >
                   <Gift className="w-4 h-4" />

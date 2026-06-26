@@ -1,8 +1,10 @@
+Closes #835
 Closes #862
+Ref #933
 
 ## Summary
 
-Implements HD wallet derivation and configurable address rotation for all five pipeline agents (Scout, Ledger, Signal, Scribe, Executor), preventing long-term address clustering and observer correlation.
+Implements the ZK payment-proof circuit for on-chain privacy-preserving subscription verification (#835 / #933), and adds HD wallet derivation with configurable address rotation for all five pipeline agents (Scout, Ledger, Signal, Scribe, Executor) to prevent address clustering (#862).
 
 ## Problem
 

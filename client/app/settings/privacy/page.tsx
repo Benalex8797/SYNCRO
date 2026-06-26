@@ -2,6 +2,8 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react';
 import Link from 'next/link';
+import { fetchUserPreferences, updateUserPreferences } from '@/lib/api/user-preferences';
+import { GIFT_CARD_PROVIDERS, DEFAULT_GIFT_CARD_PROVIDER_ID } from '@/lib/gift-card-providers';
 import { useUserSettings } from '@/components/providers/user-settings-provider';
 import { generateStealthMetaAddress, isValidStealthMetaAddress } from '@syncro/shared';
 
@@ -133,6 +135,12 @@ export default function DataPrivacyPage() {
   const [confirmed, setConfirmed] = useState(false);
   const [deleting, setDeleting] = useState(false);
 
+  // Gift card provider state
+  const [giftCardProviderId, setGiftCardProviderId] = useState(DEFAULT_GIFT_CARD_PROVIDER_ID);
+  const [giftCardProviderLoading, setGiftCardProviderLoading] = useState(true);
+  const [giftCardProviderSaving, setGiftCardProviderSaving] = useState(false);
+  const [giftCardProviderError, setGiftCardProviderError] = useState<string | null>(null);
+
   // ── Jitter state ──────────────────────────────────────────────────────────
   const [jitterLevel, setJitterLevel] = useState<JitterLevel>('off');
   const [jitterLoading, setJitterLoading] = useState(false);
@@ -159,25 +167,57 @@ export default function DataPrivacyPage() {
     };
   }, []);
 
-  // ── Load jitter preference ───────────────────────────────────────────────────
+  // ── Load preferences ───────────────────────────────────────────────────
   useEffect(() => {
+    let cancelled = false;
     fetchUserPreferences()
-      .then(prefs => {
-        if (prefs.reminder_jitter_level) {
-          setJitterLevel(prefs.reminder_jitter_level);
+      .then((prefs) => {
+        if (!cancelled) {
+          if (prefs.preferred_gift_card_provider) {
+            setGiftCardProviderId(prefs.preferred_gift_card_provider);
+          }
+          if (prefs.reminder_jitter_level) {
+            setJitterLevel(prefs.reminder_jitter_level);
+          }
         }
       })
-      .catch(err => console.error(err));
-    
+      .catch((err) => {
+        if (!cancelled) {
+          setGiftCardProviderError(err instanceof Error ? err.message : 'Failed to load preferences');
+        }
+      })
+      .finally(() => {
+        if (!cancelled) setGiftCardProviderLoading(false);
+      });
+
     // Load privacy preferences
     fetchPrivacyPreferences()
       .then(prefs => {
-        if (prefs) {
+        if (!cancelled && prefs) {
           setPrivacyPrefs(prefs);
         }
       })
       .catch(err => console.error('Failed to load privacy preferences:', err));
+
+    return () => {
+      cancelled = true;
+    };
   }, []);
+
+  const handleGiftCardProviderChange = async (providerId: string) => {
+    const previous = giftCardProviderId;
+    setGiftCardProviderId(providerId);
+    setGiftCardProviderSaving(true);
+    setGiftCardProviderError(null);
+    try {
+      await updateUserPreferences({ preferred_gift_card_provider: providerId });
+    } catch (err) {
+      setGiftCardProviderId(previous);
+      setGiftCardProviderError(err instanceof Error ? err.message : 'Failed to save provider');
+    } finally {
+      setGiftCardProviderSaving(false);
+    }
+  };
 
   // ── Handle jitter change ──────────────────────────────────────────────────
   const handleJitterChange = async (newLevel: JitterLevel) => {
@@ -480,6 +520,20 @@ export default function DataPrivacyPage() {
             </div>
           </section>
 
+          {/* ── Section: Stealth Payment Recovery ────────────────────────────── */}
+          <section className="bg-white rounded-2xl border border-gray-200 shadow-sm p-6" aria-labelledby="recovery-heading">
+            <h2 id="recovery-heading" className="text-base font-semibold text-gray-900 mb-1">Stealth Payment Recovery</h2>
+            <p className="text-sm text-gray-500 mb-4">
+              Reconstruct your full stealth payment history directly from the Stellar ledger using your viewing key. This process scans for all payments to your stealth addresses and may take several minutes.
+            </p>
+            <Link
+              href="/settings/privacy/recovery"
+              className="inline-flex px-4 py-2 text-sm font-medium bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 transition-colors focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:ring-offset-2"
+            >
+              Start Recovery Scan
+            </Link>
+          </section>
+
           {/* ── Section: Reminder Jitter ────────────────────────────────────────── */}
           <section className="bg-white rounded-2xl border border-gray-200 shadow-sm p-6" aria-labelledby="jitter-heading">
             <h2 id="jitter-heading" className="text-base font-semibold text-gray-900 mb-1">Reminder Timing Jitter</h2>
@@ -582,6 +636,56 @@ export default function DataPrivacyPage() {
             >
               Manage Email Preferences
             </Link>
+          </section>
+
+          {/* Section: Gift Card Provider */}
+          <section className="bg-white rounded-2xl border border-gray-200 shadow-sm p-6">
+            <h2 className="text-base font-semibold text-gray-900 mb-1">Gift Card Purchase Provider</h2>
+            <p className="text-sm text-gray-500 mb-4">
+              Choose which provider Syncro uses when you buy a crypto-funded gift card to pay for a subscription.
+              Providers vary in Tor support, KYC requirements, and accepted cryptocurrencies.
+            </p>
+
+            {giftCardProviderError && (
+              <p className="text-sm text-red-600 mb-3">{giftCardProviderError}</p>
+            )}
+
+            {giftCardProviderLoading ? (
+              <p className="text-sm text-gray-400">Loading...</p>
+            ) : (
+              <div className="space-y-2">
+                {GIFT_CARD_PROVIDERS.map((provider) => (
+                  <label
+                    key={provider.id}
+                    className={`flex items-start gap-3 p-3 rounded-lg border cursor-pointer transition-colors ${
+                      giftCardProviderId === provider.id
+                        ? 'border-indigo-500 bg-indigo-50'
+                        : 'border-gray-200 hover:bg-gray-50'
+                    }`}
+                  >
+                    <input
+                      type="radio"
+                      name="gift-card-provider"
+                      className="mt-1 w-4 h-4 text-indigo-600 focus:ring-indigo-500"
+                      checked={giftCardProviderId === provider.id}
+                      disabled={giftCardProviderSaving}
+                      onChange={() => handleGiftCardProviderChange(provider.id)}
+                    />
+                    <span>
+                      <span className="block text-sm font-medium text-gray-900">
+                        {provider.name}
+                        {provider.torSupport && (
+                          <span className="ml-2 inline-flex items-center px-1.5 py-0.5 rounded text-xs font-medium bg-purple-100 text-purple-700">
+                            Tor-friendly
+                          </span>
+                        )}
+                      </span>
+                      <span className="block text-xs text-gray-500 mt-0.5">{provider.description}</span>
+                    </span>
+                  </label>
+                ))}
+              </div>
+            )}
           </section>
 
           {/* ── Section: Delete Account ─────────────────────────────────── */}
