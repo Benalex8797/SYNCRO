@@ -16,6 +16,7 @@ import { supabase } from '../config/database';
 import logger from '../config/logger';
 import { createTagSchema, notesSchema, addTagSchema } from '../schemas/tag';
 import { uuidParamSchema } from '../schemas/common';
+import { parseDbError } from '../utils/db-constraint-errors';
 
 const router: express.Router = express.Router();
 router.use(authenticate);
@@ -64,8 +65,9 @@ router.post('/', validate(createTagSchema), async (req: AuthenticatedRequest, re
       .single();
 
     if (error) {
-      if (error.code === '23505') {
-        return res.status(409).json({ success: false, error: 'A tag with that name already exists' });
+      const appError = parseDbError(error);
+      if (appError) {
+        return res.status(appError.status).json({ success: false, error: appError.message, field: appError.field });
       }
       throw error;
     }
@@ -144,10 +146,16 @@ router.post(
       }
 
       const { error } = await supabase
-        .from('subscription_tag_assignments')
-        .upsert({ subscription_id: subscriptionId, tag_id });
+        .from('subscription_tags')
+        .insert({ subscription_id: subscriptionId, tag_id });
 
-      if (error) throw error;
+      if (error) {
+        const appError = parseDbError(error);
+        if (appError) {
+          return res.status(appError.status).json({ success: false, error: appError.message, field: appError.field });
+        }
+        throw error;
+      }
 
       return res.status(200).json({ success: true, data: { assigned: true } });
     } catch (error) {
@@ -180,12 +188,18 @@ router.delete('/subscriptions/:id/tags/:tagId', validate(uuidParamSchema, 'param
     }
 
     const { error } = await supabase
-      .from('subscription_tag_assignments')
+      .from('subscription_tags')
       .delete()
       .eq('subscription_id', subscriptionId)
       .eq('tag_id', tagId);
 
-    if (error) throw error;
+    if (error) {
+      const appError = parseDbError(error);
+      if (appError) {
+        return res.status(appError.status).json({ success: false, error: appError.message, field: appError.field });
+      }
+      throw error;
+    }
 
     return res.status(200).json({ success: true, data: { removed: true } });
   } catch (error) {

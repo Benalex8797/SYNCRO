@@ -31,6 +31,8 @@ export interface Subscription {
   last_interaction_at: string | null;
   last_renewal_attempt_at?: string | null;
   failure_count?: number;
+  stealth_index: number;
+  stealth_address: string | null;
 }
 
 export interface SubscriptionCreateInput {

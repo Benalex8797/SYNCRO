@@ -88,6 +88,7 @@ npm run generate-pwa-assets     # Generate all assets
 - [ ] Cached routes load when offline
 - [ ] Offline page shows cached subscriptions
 - [ ] Fallback to offline page for uncached routes
+- [ ] Browser automation validates offline banner and offline page render
 
 ### Push Notifications
 - [ ] Renewal reminders trigger notifications

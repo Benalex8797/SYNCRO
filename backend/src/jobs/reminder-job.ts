@@ -4,6 +4,7 @@ import { notificationPreferenceService } from '../services/notification-preferen
 import { checkBudgetAlerts } from '../services/budget-alert-service';
 import { supabase } from '../config/database';
 import logger from '../config/logger';
+import { runWithCorrelationId } from '../middleware/requestContext';
 
 /**
  * Daily cron jobs for reminder processing.
@@ -11,66 +12,75 @@ import logger from '../config/logger';
  */
 
 // Auto-unmute expired snoozes — runs at 00:00 UTC daily
-cron.schedule('0 0 * * *', async () => {
-  logger.info('Cron: processing expired snoozes');
-  try {
-    await notificationPreferenceService.processExpiredSnoozes();
-    logger.info('Cron: expired snoozes processed successfully');
-  } catch (error) {
-    logger.error('Cron: failed to process expired snoozes:', error);
-  }
-});
+cron.schedule('0 0 * * *', () =>
+  runWithCorrelationId('cron:expired-snoozes', async (cid) => {
+    logger.info('Cron: processing expired snoozes', { correlationId: cid });
+    try {
+      await notificationPreferenceService.processExpiredSnoozes();
+      logger.info('Cron: expired snoozes processed successfully');
+    } catch (error) {
+      logger.error('Cron: failed to process expired snoozes:', error);
+    }
+  }),
+);
 
 // Schedule reminders — runs at 08:00 UTC daily
-cron.schedule('0 8 * * *', async () => {
-  logger.info('Cron: scheduling reminders');
-  try {
-    await reminderEngine.scheduleReminders();
-    logger.info('Cron: reminders scheduled successfully');
-  } catch (error) {
-    logger.error('Cron: failed to schedule reminders:', error);
-  }
-});
+cron.schedule('0 8 * * *', () =>
+  runWithCorrelationId('cron:schedule-reminders', async (cid) => {
+    logger.info('Cron: scheduling reminders', { correlationId: cid });
+    try {
+      await reminderEngine.scheduleReminders();
+      logger.info('Cron: reminders scheduled successfully');
+    } catch (error) {
+      logger.error('Cron: failed to schedule reminders:', error);
+    }
+  }),
+);
 
 // Process pending reminders — runs at 09:00 UTC daily
-cron.schedule('0 9 * * *', async () => {
-  logger.info('Cron: processing reminders');
-  try {
-    await reminderEngine.processReminders();
-    logger.info('Cron: reminders processed successfully');
-  } catch (error) {
-    logger.error('Cron: failed to process reminders:', error);
-  }
-});
+cron.schedule('0 9 * * *', () =>
+  runWithCorrelationId('cron:process-reminders', async (cid) => {
+    logger.info('Cron: processing reminders', { correlationId: cid });
+    try {
+      await reminderEngine.processReminders();
+      logger.info('Cron: reminders processed successfully');
+    } catch (error) {
+      logger.error('Cron: failed to process reminders:', error);
+    }
+  }),
+);
 
 // Process delivery retries — runs every 30 minutes
-cron.schedule('*/30 * * * *', async () => {
-  logger.info('Cron: processing retries');
-  try {
-    await reminderEngine.processRetries();
-    logger.info('Cron: retries processed successfully');
-  } catch (error) {
-    logger.error('Cron: failed to process retries:', error);
-  }
-});
+cron.schedule('*/30 * * * *', () =>
+  runWithCorrelationId('cron:retries', async (cid) => {
+    logger.info('Cron: processing retries', { correlationId: cid });
+    try {
+      await reminderEngine.processRetries();
+      logger.info('Cron: retries processed successfully');
+    } catch (error) {
+      logger.error('Cron: failed to process retries:', error);
+    }
+  }),
+);
 
 // Budget alerts — runs at 10:00 UTC daily
-cron.schedule('0 10 * * *', async () => {
-  logger.info('Cron: checking budget alerts');
-  try {
-    // Fetch all distinct user IDs that have a monthly_budget set
-    const { data: profiles } = await supabase
-      .from('profiles')
-      .select('id')
-      .not('monthly_budget', 'is', null);
+cron.schedule('0 10 * * *', () =>
+  runWithCorrelationId('cron:budget-alerts', async (cid) => {
+    logger.info('Cron: checking budget alerts', { correlationId: cid });
+    try {
+      const { data: profiles } = await supabase
+        .from('profiles')
+        .select('id')
+        .not('monthly_budget', 'is', null);
 
-    await Promise.allSettled(
-      (profiles ?? []).map((p: { id: string }) => checkBudgetAlerts(p.id))
-    );
-    logger.info('Cron: budget alerts processed');
-  } catch (error) {
-    logger.error('Cron: failed to process budget alerts:', error);
-  }
-});
+      await Promise.allSettled(
+        (profiles ?? []).map((p: { id: string }) => checkBudgetAlerts(p.id))
+      );
+      logger.info('Cron: budget alerts processed');
+    } catch (error) {
+      logger.error('Cron: failed to process budget alerts:', error);
+    }
+  }),
+);
 
 logger.info('Cron jobs registered');

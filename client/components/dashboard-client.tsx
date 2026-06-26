@@ -1,11 +1,14 @@
 "use client"
 
-import { useState } from "react"
+import { useEffect, useState } from "react"
 import { createClient } from "@/lib/supabase/client"
 import type { User } from "@supabase/supabase-js"
 import { SuggestionsPanel } from "@/components/app/SuggestionsPanel"
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
 import { AlertTriangle, Info } from "lucide-react"
+import { formatDate } from "@/lib/timezone-utils"
+import { formatCurrency } from "@/lib/currency-utils"
+import { saveSubscriptionsOffline } from "@/lib/offline-cache"
 
 interface Subscription {
   id: string
@@ -47,6 +50,23 @@ export default function DashboardClient({
   const [notifications] = useState(initialNotifications)
   // initialEmailAccounts reserved for future email account display
   const [gdprLoading, setGdprLoading] = useState<"export" | "delete" | null>(null)
+
+  // Persist subscriptions for offline reading
+  useEffect(() => {
+    if (subscriptions.length > 0) {
+      saveSubscriptionsOffline(
+        subscriptions.map((s) => ({
+          id: s.id,
+          name: s.name,
+          status: s.status,
+          billing_cycle: s.billing_cycle,
+          next_renewal: s.next_renewal ?? null,
+          price: Number(s.price),
+          category: s.category ?? null,
+        })),
+      )
+    }
+  }, [subscriptions])
   const [gdprMessage, setGdprMessage] = useState<string | null>(null)
 
   const handleSignOut = async () => {
@@ -195,11 +215,12 @@ export default function DashboardClient({
                       <tr key={sub.id} className="hover:bg-gray-50 transition-colors">
                         <td className="px-6 py-4 font-medium text-gray-900">{sub.name}</td>
                         <td className="px-6 py-4 text-gray-600 capitalize">{sub.category}</td>
-                        <td className="px-6 py-4 text-gray-600">${Number(sub.price).toFixed(2)}</td>
+                        <td className="px-6 py-4 text-gray-600">{formatCurrency(Number(sub.price))}</td>
                         <td className="px-6 py-4 text-gray-600 capitalize">{sub.billing_cycle}</td>
                         <td className="px-6 py-4 text-gray-600">
-                          {sub.next_renewal ? new Date(sub.next_renewal).toLocaleDateString() : "—"}
+                          {sub.next_renewal ? formatDate(sub.next_renewal) : "—"}
                         </td>
+
                         <td className="px-6 py-4">
                           <span className={`px-2 py-0.5 rounded-full text-xs font-medium capitalize ${STATUS_STYLES[sub.status] ?? "bg-gray-100 text-gray-600"}`}>
                             {sub.status}
@@ -225,9 +246,9 @@ export default function DashboardClient({
                       <span className="text-gray-400">Category</span>
                       <span className="capitalize">{sub.category}</span>
                       <span className="text-gray-400">Price</span>
-                      <span>${Number(sub.price).toFixed(2)} / {sub.billing_cycle}</span>
+                      <span>{formatCurrency(Number(sub.price))} / {sub.billing_cycle}</span>
                       <span className="text-gray-400">Next Renewal</span>
-                      <span>{sub.next_renewal ? new Date(sub.next_renewal).toLocaleDateString() : "—"}</span>
+                      <span>{sub.next_renewal ? formatDate(sub.next_renewal) : "—"}</span>
                     </div>
                   </li>
                 ))}

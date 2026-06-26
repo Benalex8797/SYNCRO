@@ -42,7 +42,7 @@ Issue Resolution Summary - Type Safety & Testing Improvements
 
 Next Steps
 ----------
-- Integrate @synchro/shared into client, backend, and sdk package.json
+- Integrate @syncro/shared into client, backend, and sdk package.json
 - Migrate existing type definitions to use shared package
 - Update DTO transformation functions to use shared types
 - Remove duplicate type definitions across layers

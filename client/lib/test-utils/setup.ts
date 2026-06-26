@@ -27,3 +27,8 @@ vi.mock('next/navigation', () => ({
 // Mock environment variables
 process.env.NEXT_PUBLIC_SUPABASE_URL = 'http://localhost:54321';
 process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY = 'test-anon-key';
+process.env.STRIPE_SECRET_KEY = 'sk_test_mock';
+process.env.PAYPAL_CLIENT_ID = 'client_id_mock';
+process.env.PAYPAL_CLIENT_SECRET = 'client_secret_mock';
+process.env.ENABLE_MOCK_PAYMENTS = 'true';
+

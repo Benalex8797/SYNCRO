@@ -16,6 +16,7 @@ export default defineConfig({
   test: {
     globals: true,
     environment: "node",
+    setupFiles: ["./lib/test-utils/setup.ts"],
     include: [
       "app/**/*.test.ts",
       "**/__tests__/**/*.test.ts",

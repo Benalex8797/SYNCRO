@@ -4,11 +4,11 @@ This document outlines the retention policies for data within the SYNCRO applica
 
 ## Soft-Delete Retention
 
-To allow users to recover accidentally deleted data and to maintain temporary records for auditing, we employ a "soft-delete" approach for specific entities. 
+To allow users to recover accidentally deleted data and to maintain temporary records for auditing, we employ a "soft-delete" approach for specific entities.
 
 ### Subscriptions
 
-- **Soft-Delete Window:** When a user deletes a subscription, its `status` is marked as `deleted` and the `deleted_at` timestamp is set. 
+- **Soft-Delete Window:** When a user deletes a subscription, its `status` is marked as `deleted` and the `deleted_at` timestamp is set.
 - **Retention Period:** Soft-deleted subscriptions are retained in the database for **30 days**.
 - **Restoration:** Within this 30-day window, users can restore the subscription via the API (`POST /api/subscriptions/:id/restore`), which resets the status to `active` and clears the `deleted_at` timestamp.
 - **Hard-Delete (Purge):** A daily scheduled background job (`SchedulerService`) automatically purges any subscriptions where the `deleted_at` timestamp is older than 30 days. This is a permanent, non-recoverable deletion from the database, which cascades down to associated tags, notes, and reminders.

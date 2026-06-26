@@ -4,6 +4,11 @@ import { reorgHandler } from './reorg-handler';
 import { generateCycleId } from '../utils/cycle-id';
 import { renewalCooldownService } from './renewal-cooldown-service';
 import { calculateBackoffDelay } from '../utils/retry';
+import { RpcClient } from '../../../shared/src/rpc-client';
+import {
+  getBlockchainFlags,
+  resolveStellarNetwork,
+} from '../../../shared/blockchain-flags';
 
 import { 
   ContractEvent, 
@@ -17,24 +22,16 @@ import {
   ExecutorAssignedPayload,
   DuplicateRenewalRejectedPayload,
   LifecycleTimestampUpdatedPayload,
-  ContractEventValue
+  ContractEventValue,
+  CURRENT_CONTRACT_EVENT_SCHEMA_VERSION,
 } from '../types/contract-events';
 import { rpcEventResponseSchema } from '../schemas/contract-events';
 import { Subscription } from '../types/subscription';
 
 export type EventListenerStatus = 'running' | 'stopped' | 'disabled' | 'retrying' | 'failed';
 
-export interface EventListenerHealth {
-  status: EventListenerStatus;
-  isRunning: boolean;
-  lastSuccessfulPoll: string | null;
-  consecutiveErrors: number;
-  lastProcessedLedger: number | null;
-  reason?: string;
-  retryCount?: number;
-  nextRetryAt?: string | null;
-}
-
+const SUPPORTED_CONTRACT_EVENT_SCHEMA_VERSIONS = [CURRENT_CONTRACT_EVENT_SCHEMA_VERSION] as const;
+/** See job-alert-config.ts `event-listener` thresholds (default: 10 consecutive failures). */
 const ALERT_THRESHOLD = 10;
 const MAX_BACKOFF_MS = 300_000; // 5 minutes
 const MAX_RETRY_ATTEMPTS = 10;
@@ -43,7 +40,7 @@ const RETRY_MAX_DELAY_MS = 5 * 60 * 1000; // 5 minutes
 
 export class EventListener {
   private contractId: string;
-  private rpcUrl: string;
+  private rpcUrl: string = '';
   private lastProcessedLedger: number = 0;
   private isRunning: boolean = false;
   private isProcessing: boolean = false;
@@ -61,15 +58,49 @@ export class EventListener {
   private _disabledReason?: string;
   private _retryCount: number = 0;
   private _nextRetryAt: Date | null = null;
+  private activeRequestController: AbortController | null = null;
+  private rpcClient: RpcClient;
 
   constructor() {
     this.contractId = process.env.SOROBAN_CONTRACT_ADDRESS || '';
-    this.rpcUrl = process.env.STELLAR_NETWORK_URL || 'https://soroban-testnet.stellar.org';
+
+    const flags = getBlockchainFlags();
+    const network = resolveStellarNetwork();
+
+    // Resolve RPC URL — never silently fall back to testnet in production.
+    const configuredUrl = process.env.STELLAR_NETWORK_URL;
+    if (!configuredUrl && flags.isProduction) {
+      this._status = 'disabled';
+      this._disabledReason =
+        'STELLAR_NETWORK_URL must be explicitly set in production. ' +
+        'Refusing to fall back to the testnet RPC endpoint.';
+      logger.error(`EventListener disabled: ${this._disabledReason}`);
+    } else {
+      this.rpcUrl =
+        configuredUrl ||
+        (network === 'mainnet'
+          ? 'https://soroban-rpc.creit.tech'
+          : network === 'futurenet'
+            ? 'https://rpc-futurenet.stellar.org'
+            : 'https://soroban-testnet.stellar.org');
+    }
+
+    this.rpcClient = new RpcClient({
+      timeoutMs: 15000,
+      maxRetries: 3,
+      circuitBreakerThreshold: 5,
+    });
 
     if (!this.contractId) {
       this._status = 'disabled';
       this._disabledReason = 'SOROBAN_CONTRACT_ADDRESS not configured';
       logger.warn('EventListener disabled: SOROBAN_CONTRACT_ADDRESS not configured');
+    }
+
+    if (!flags.blockchainEnabled) {
+      this._status = 'disabled';
+      this._disabledReason = 'ENABLE_BLOCKCHAIN=false — event listener is disabled';
+      logger.warn(`EventListener disabled: ${this._disabledReason}`);
     }
   }
 
@@ -224,7 +255,7 @@ export class EventListener {
   private async fetchEvents(fromLedger: number): Promise<ContractEvent[]> {
     const requestController = this.beginRequest();
     try {
-      const response = await fetch(this.rpcUrl, {
+      const response = await this.rpcClient.fetch(this.rpcUrl, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -256,10 +287,36 @@ export class EventListener {
     }
   }
 
+  private getEventSchemaVersion(event: ContractEvent): number {
+    const rawVersion = (event.value as any)?.schema_version;
+    return typeof rawVersion === 'number'
+      ? rawVersion
+      : CURRENT_CONTRACT_EVENT_SCHEMA_VERSION;
+  }
+
+  private isSupportedSchemaVersion(event: ContractEvent): boolean {
+    const version = this.getEventSchemaVersion(event);
+    const supported = SUPPORTED_CONTRACT_EVENT_SCHEMA_VERSIONS.includes(version as typeof SUPPORTED_CONTRACT_EVENT_SCHEMA_VERSIONS[number]);
+
+    if (!supported) {
+      logger.warn('Unsupported contract event schema version', {
+        eventType: event.type,
+        txHash: event.txHash,
+        ledger: event.ledger,
+        schemaVersion: version,
+        supportedVersions: SUPPORTED_CONTRACT_EVENT_SCHEMA_VERSIONS,
+      });
+    }
+
+    return supported;
+  }
+
   private async processEvents(events: ContractEvent[]): Promise<ProcessedEvent[]> {
     const processed: ProcessedEvent[] = [];
 
     for (const event of events) {
+      if (!this.isSupportedSchemaVersion(event)) continue;
+
       const handler = this.getEventHandler(event.type);
       if (handler) {
         const result = await handler(event);
@@ -546,7 +603,7 @@ export class EventListener {
   private async getCurrentLedger(): Promise<number> {
     const requestController = this.beginRequest();
     try {
-      const response = await fetch(this.rpcUrl, {
+      const response = await this.rpcClient.fetch(this.rpcUrl, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({

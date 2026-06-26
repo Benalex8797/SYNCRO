@@ -298,4 +298,80 @@ describe('POST /api/webhooks/stripe', () => {
     expect(data1.received).toBe(true);
     expect(data2.received).toBe(true);
   });
+
+  it('should return 500 when database update fails for succeeded event (enables Stripe retry)', async () => {
+    const event = mockWebhookEvent({
+      type: 'payment_intent.succeeded',
+      data: {
+        object: {
+          id: 'pi_test_db_fail',
+          amount: 2999,
+          currency: 'usd',
+          status: 'succeeded',
+          metadata: {
+            userId: 'user-db-fail',
+            planName: 'Pro Plan',
+          },
+        },
+      },
+    });
+
+    mockConstructEvent.mockReturnValue(event);
+
+    // Simulate a DB failure on the eq() call (end of update chain)
+    mockSupabaseEq.mockResolvedValueOnce({
+      data: null,
+      error: { message: 'Connection refused', code: 'PGRST301' },
+    });
+
+    const request = new Request('http://localhost:3000/api/webhooks/stripe', {
+      method: 'POST',
+      headers: {
+        'stripe-signature': validSignature,
+      },
+      body: JSON.stringify(event),
+    });
+
+    const response = await POST(request);
+    const data = await response.json();
+
+    expect(response.status).toBe(500);
+    expect(data.error).toContain('Database error');
+  });
+
+  it('should return 500 when database update fails for failed event (enables Stripe retry)', async () => {
+    const event = mockWebhookEvent({
+      type: 'payment_intent.payment_failed',
+      data: {
+        object: {
+          id: 'pi_test_fail_db_err',
+          amount: 1000,
+          currency: 'usd',
+          status: 'failed',
+        },
+      },
+    });
+
+    mockConstructEvent.mockReturnValue(event);
+
+    // Simulate a DB failure
+    mockSupabaseEq.mockResolvedValueOnce({
+      data: null,
+      error: { message: 'Timeout', code: 'PGRST500' },
+    });
+
+    const request = new Request('http://localhost:3000/api/webhooks/stripe', {
+      method: 'POST',
+      headers: {
+        'stripe-signature': validSignature,
+      },
+      body: JSON.stringify(event),
+    });
+
+    const response = await POST(request);
+    const data = await response.json();
+
+    expect(response.status).toBe(500);
+    expect(data.error).toContain('Database error');
+  });
 });

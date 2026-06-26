@@ -1,9 +1,31 @@
-import { Router, Request, Response } from 'express';
+import { Router, Request, Response, NextFunction } from 'express';
 import { supabase } from '../config/database';
 import logger from '../config/logger';
 import { telegramBotService } from '../services/telegram-bot-service';
 
 const router = Router();
+
+/**
+ * Validate the X-Telegram-Bot-Api-Secret-Token header.
+ * Rejects requests that don't carry the configured secret.
+ * If TELEGRAM_WEBHOOK_SECRET is not set the check is skipped (dev/test).
+ */
+function validateWebhookSecret(req: Request, res: Response, next: NextFunction): void {
+  const secret = process.env.TELEGRAM_WEBHOOK_SECRET;
+  if (!secret) {
+    next();
+    return;
+  }
+  const header = req.headers['x-telegram-bot-api-secret-token'];
+  if (header !== secret) {
+    logger.warn('[TelegramWebhook] Invalid or missing secret token', {
+      ip: req.ip,
+    });
+    res.sendStatus(403);
+    return;
+  }
+  next();
+}
 
 interface TelegramUpdate {
     update_id: number;
@@ -34,7 +56,7 @@ interface TelegramUpdate {
  * Webhook endpoint for Telegram bot updates
  * Handles /start command to connect user accounts
  */
-router.post('/webhook', async (req: Request, res: Response) => {
+router.post('/webhook', validateWebhookSecret, async (req: Request, res: Response) => {
     try {
         const update: TelegramUpdate = req.body;
 

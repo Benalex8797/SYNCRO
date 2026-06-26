@@ -7,8 +7,6 @@ export interface RequestContext {
   requestId: string;
   /** Populated by auth middleware once the user is known */
   userId?: string;
-  isPrivacyModeEnabled?: boolean;
-  privacyPreferences?: any;
 }
 
 /** Extended Express Request with requestId attached */
@@ -70,21 +68,16 @@ export function setRequestUserId(userId: string): void {
 }
 
 /**
- * Call this from your auth middleware after fetching user's privacy mode status
+ * Run an async job (cron, queue worker, etc.) with a fresh correlation ID
+ * so all log entries and audit events produced inside `fn` carry the same ID.
+ *
+ * Usage:
+ *   await runWithCorrelationId('cron:reminder', async () => { ... });
  */
-export function setRequestPrivacyMode(enabled: boolean): void {
-  const store = requestContextStorage.getStore();
-  if (store) {
-    store.isPrivacyModeEnabled = enabled;
-  }
-}
-
-/**
- * Call this from your auth middleware to store full user privacy preferences in context
- */
-export function setRequestPrivacyPreferences(prefs: any): void {
-  const store = requestContextStorage.getStore();
-  if (store) {
-    store.privacyPreferences = prefs;
-  }
+export function runWithCorrelationId<T>(
+  label: string,
+  fn: (correlationId: string) => Promise<T>,
+): Promise<T> {
+  const correlationId = `${label}:${uuidv4()}`;
+  return requestContextStorage.run({ requestId: correlationId }, () => fn(correlationId));
 }

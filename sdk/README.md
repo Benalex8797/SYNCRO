@@ -337,7 +337,7 @@ interface RetryOptions {
 import { init } from "@syncro/sdk";
 
 const sdk = init({
-  apiKey: "sk_live_abc123xyz",
+  apiKey: "sk_live_...", // Your Syncro API key
   wallet: yourWallet,
 });
 
@@ -353,7 +353,7 @@ const sdk = init({
 
 ```typescript
 const sdk = init({
-  apiKey: "sk_live_abc123xyz",
+  apiKey: "sk_live_...", // Your Syncro API key
   baseURL: "https://api.syncro.com",
   timeout: 60000, // 60 seconds
   retryOptions: {
@@ -520,7 +520,7 @@ When `enableLogging` is enabled, the SDK logs:
 [SyncroSDK] Initializing with config: { ... }
 [SyncroSDK] Fetching subscription: sub_123
 [SyncroSDK] Retrying request (attempt 1/3) after 1000ms
-[SyncroSDK] Cache hit for key: syncro_subs_sk_live_abc123xyz
+[SyncroSDK] Cache hit for key: syncro_subs_<api_key_hash>
 ```
 
 ## Error Handling

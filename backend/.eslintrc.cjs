@@ -20,6 +20,26 @@ module.exports = {
     "@typescript-eslint/no-floating-promises": "error",
     "no-console": "warn",
     "@typescript-eslint/no-unused-vars": "warn",
+    // Package boundary: backend must not import from client
+    "no-restricted-imports": [
+      "error",
+      {
+        patterns: [
+          {
+            group: ["../client/**", "../../client/**"],
+            message: "Backend must not import from client.",
+          },
+          {
+            group: ["../sdk/src/**", "../../sdk/src/**"],
+            message: "Import from the published @syncro/sdk package, not its source.",
+          },
+          {
+            group: ["../shared/src/**", "../../shared/src/**"],
+            message: "Import from @syncro/shared, not its source path.",
+          },
+        ],
+      },
+    ],
   },
   overrides: [
     {

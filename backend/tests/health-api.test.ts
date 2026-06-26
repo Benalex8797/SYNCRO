@@ -1,6 +1,7 @@
 import request from 'supertest';
 import express from 'express';
 import { healthService } from '../src/services/health-service';
+import { adminAuth } from '../src/middleware/admin';
 
 jest.mock('../src/services/health-service', () => ({
   healthService: {
@@ -11,15 +12,6 @@ jest.mock('../src/services/health-service', () => ({
 jest.mock('../src/config/logger');
 
 const app = express();
-const ADMIN_API_KEY = 'test-admin-key';
-
-const adminAuth = (req: express.Request, res: express.Response, next: express.NextFunction) => {
-  const apiKey = req.headers['x-admin-api-key'];
-  if (!apiKey || apiKey !== ADMIN_API_KEY) {
-    return res.status(401).json({ error: 'Unauthorized: Invalid admin API key' });
-  }
-  next();
-};
 
 app.get('/api/admin/health', adminAuth, async (req, res) => {
   try {
@@ -38,11 +30,11 @@ describe('Admin Health API', () => {
     expect(response.status).toBe(401);
   });
 
-  it('should return 401 if x-admin-api-key is incorrect', async () => {
+  it('should return 403 if x-admin-api-key is incorrect', async () => {
     const response = await request(app)
       .get('/api/admin/health')
       .set('x-admin-api-key', 'wrong-key');
-    expect(response.status).toBe(401);
+    expect(response.status).toBe(403);
   });
 
   it('should return 200 and health payload when healthy', async () => {
@@ -67,7 +59,7 @@ describe('Admin Health API', () => {
 
     const response = await request(app)
       .get('/api/admin/health')
-      .set('x-admin-api-key', ADMIN_API_KEY);
+      .set('x-admin-api-key', process.env.ADMIN_API_KEY!);
 
     expect(response.status).toBe(200);
     expect(response.body.status).toBe('healthy');
@@ -97,7 +89,7 @@ describe('Admin Health API', () => {
 
     const response = await request(app)
       .get('/api/admin/health')
-      .set('x-admin-api-key', ADMIN_API_KEY);
+      .set('x-admin-api-key', process.env.ADMIN_API_KEY!);
 
     expect(response.status).toBe(503);
     expect(response.body.status).toBe('unhealthy');
@@ -116,7 +108,7 @@ describe('Admin Health API', () => {
 
     await request(app)
       .get('/api/admin/health?history=false')
-      .set('x-admin-api-key', ADMIN_API_KEY);
+      .set('x-admin-api-key', process.env.ADMIN_API_KEY!);
 
     expect(healthService.getAdminHealth).toHaveBeenCalledWith(false);
   });

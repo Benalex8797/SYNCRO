@@ -27,6 +27,7 @@ async function loadPrivacyPreferences(userId: string): Promise<void> {
   }
 }
 import { roleService } from '../services/role-service';
+import { auditApiKeyEvent, emitSecurityEvent } from '../services/audit-service';
 
 export type UserRole = 'owner' | 'admin' | 'member' | 'viewer';
 
@@ -94,6 +95,11 @@ async function authenticateWithApiKey(
     .single();
 
   if (error || !keyRecord) {
+    await auditApiKeyEvent('api_key.auth_failed', undefined, {
+      ipAddress: req.ip,
+      userAgent: req.headers['user-agent'] as string | undefined,
+      reason: 'Invalid or revoked API key',
+    });
     res.status(401).json({ error: 'Invalid API key' });
     return true;
   }
@@ -158,6 +164,17 @@ export async function authenticate(
 
     if (error || !user) {
       logger.warn('Authentication failed', { error: error?.message });
+      const isExpired = error?.message?.toLowerCase().includes('expired');
+      await emitSecurityEvent(
+        isExpired ? 'auth.jwt_expired' : 'auth.jwt_invalid',
+        {
+          severity: 'medium',
+          resourceType: 'auth',
+          reason: error?.message || 'Invalid or expired token',
+          ipAddress: req.ip,
+          userAgent: req.headers['user-agent'] as string | undefined,
+        },
+      );
       res.status(401).json({
         error: 'Unauthorized',
         message: 'Invalid or expired token',

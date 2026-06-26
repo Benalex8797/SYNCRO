@@ -1,5 +1,103 @@
 import { supabase } from '../config/database';
 import logger from '../config/logger';
+import { getRequestId } from '../middleware/requestContext';
+
+// ─── Structured Security Event Types ─────────────────────────────────────────
+
+export type SecurityEventSeverity = 'low' | 'medium' | 'high' | 'critical';
+
+export type SecurityEventType =
+  | 'auth.jwt_invalid'
+  | 'auth.jwt_expired'
+  | 'auth.rate_limited'
+  | 'auth.unauthorized_access'
+  | 'mfa.recovery_code_failed'
+  | 'mfa.recovery_code_generated'
+  | 'mfa.disabled'
+  | 'mfa.failure_threshold_reached'
+  | 'webhook.auto_disabled'
+  | 'webhook.dead_letter_exhausted'
+  | 'webhook.anomalous_failure_rate'
+  | 'api_key.created'
+  | 'api_key.rotated'
+  | 'api_key.revoked'
+  | 'api_key.auth_failed'
+  | 'api_key.suspicious_usage';
+
+export interface SecurityEventMeta {
+  severity: SecurityEventSeverity;
+  actorId?: string;
+  resourceType: string;
+  resourceId?: string;
+  ipAddress?: string;
+  userAgent?: string;
+  reason?: string;
+  details?: Record<string, unknown>;
+}
+
+/**
+ * Emit a structured security event.
+ * These events are written to the audit_logs table with a dedicated security
+ * resource type prefix and structured metadata for downstream detection and
+ * retention tooling.
+ */
+export async function emitSecurityEvent(
+  eventType: SecurityEventType,
+  meta: SecurityEventMeta,
+): Promise<void> {
+  await auditService.insertEntry({
+    userId: meta.actorId,
+    action: eventType,
+    resourceType: `security.${meta.resourceType}`,
+    resourceId: meta.resourceId,
+    metadata: {
+      severity: meta.severity,
+      correlationId: getRequestId(),
+      reason: meta.reason,
+      details: meta.details ?? null,
+    },
+    ipAddress: meta.ipAddress,
+    userAgent: meta.userAgent,
+  });
+}
+
+// ─── API Key lifecycle event types ───────────────────────────────────────────
+export type ApiKeyEvent = 'api_key.created' | 'api_key.rotated' | 'api_key.revoked' | 'api_key.auth_failed';
+
+export interface ApiKeyAuditMeta {
+  keyId?: string;
+  keyName?: string;
+  scopes?: string[];
+  ipAddress?: string;
+  userAgent?: string;
+  reason?: string;
+}
+
+/**
+ * Log an API key lifecycle event.
+ * Actor = the authenticated user performing the action (or undefined for failed auth).
+ * Target = the key being acted upon.
+ */
+export async function auditApiKeyEvent(
+  event: ApiKeyEvent,
+  actorId: string | undefined,
+  meta: ApiKeyAuditMeta,
+): Promise<void> {
+  await auditService.insertEntry({
+    userId: actorId,
+    action: event,
+    resourceType: 'api_key',
+    resourceId: meta.keyId,
+    metadata: {
+      keyName: meta.keyName,
+      scopes: meta.scopes,
+      correlationId: getRequestId(),
+      reason: meta.reason,
+    },
+    ipAddress: meta.ipAddress,
+    userAgent: meta.userAgent,
+  });
+}
 
 export interface AuditEntry {
   userId?: string;
@@ -273,3 +371,6 @@ class AuditService {
 }
 
 export const auditService = new AuditService();
+
+// Re-export for convenience
+export { AuditService };

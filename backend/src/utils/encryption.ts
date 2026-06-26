@@ -1,18 +1,24 @@
 import crypto from 'crypto';
 import { env } from '../config/env';
 
-// Use a dedicated ENCRYPTION_KEY if available, fallback to JWT_SECRET for backward compatibility
-// Must be exactly 32 bytes for AES-256
 const getEncryptionKey = (): Buffer => {
-  const keySource = env.ENCRYPTION_KEY || env.JWT_SECRET || '';
-  // Hash the source to ensure it's exactly 32 bytes
+  if (env.ENCRYPTION_KEY) {
+    const hexKey = Buffer.from(env.ENCRYPTION_KEY, 'hex');
+    if (hexKey.length === 32) {
+      return hexKey;
+    }
+  }
+
+  const keySource = env.ENCRYPTION_KEY || env.JWT_SECRET;
+  if (!keySource) {
+    throw new Error('ENCRYPTION_KEY or JWT_SECRET is required for encryption');
+  }
+
   return crypto.createHash('sha256').update(String(keySource)).digest();
 };
 
 const ALGORITHM = 'aes-256-gcm';
-const IV_LENGTH = 16;
-const SALT_LENGTH = 64;
-const TAG_LENGTH = 16;
+const IV_LENGTH = 12;
 
 /**
  * Encrypts a string using AES-256-GCM.
@@ -21,18 +27,17 @@ const TAG_LENGTH = 16;
  */
 export function encrypt(text: string): string {
   if (!text) return text;
-  
+
   const iv = crypto.randomBytes(IV_LENGTH);
   const key = getEncryptionKey();
-  
-  const cipher = crypto.createCipheriv(ALGORITHM, iv, key);
-  
+
+  const cipher = crypto.createCipheriv(ALGORITHM, key, iv);
+
   let encrypted = cipher.update(text, 'utf8', 'hex');
   encrypted += cipher.final('hex');
-  
+
   const tag = cipher.getAuthTag();
-  
-  // Format: iv:tag:encrypted
+
   return `${iv.toString('hex')}:${tag.toString('hex')}:${encrypted}`;
 }
 
@@ -43,29 +48,27 @@ export function encrypt(text: string): string {
  */
 export function decrypt(encryptedText: string): string {
   if (!encryptedText || !encryptedText.includes(':')) {
-    // Return as-is if it doesn't look like an encrypted string (e.g., legacy unencrypted token)
     return encryptedText;
   }
-  
+
   try {
     const parts = encryptedText.split(':');
     if (parts.length !== 3) return encryptedText;
-    
+
     const [ivHex, tagHex, encryptedDataHex] = parts;
-    
+
     const iv = Buffer.from(ivHex, 'hex');
     const tag = Buffer.from(tagHex, 'hex');
     const key = getEncryptionKey();
-    
-    const decipher = crypto.createDecipheriv(ALGORITHM, iv, key);
+
+    const decipher = crypto.createDecipheriv(ALGORITHM, key, iv);
     decipher.setAuthTag(tag);
-    
+
     let decrypted = decipher.update(encryptedDataHex, 'hex', 'utf8');
     decrypted += decipher.final('utf8');
-    
+
     return decrypted;
-  } catch (error) {
-    // If decryption fails, return original text. It might be unencrypted legacy data.
+  } catch {
     return encryptedText;
   }
 }

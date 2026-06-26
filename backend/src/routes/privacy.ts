@@ -1,147 +1,120 @@
 import { Router, Response } from 'express';
-import { supabase } from '../config/database';
 import { authenticate, AuthenticatedRequest } from '../middleware/auth';
-import { privacyService } from '../services/privacy-service';
 import logger from '../config/logger';
-import { PRIVACY_FLAGS_CONFIG, PrivacyFlag } from '../../../shared/src/blockchain-flags';
+import { stealthScanner } from '../services/stealth-scanner';
+import { emitSecurityEvent } from '../services/audit-service';
 
-const router: Router = Router();
+const router = Router();
 
-// All privacy routes require authentication
 router.use(authenticate);
 
 /**
- * GET /api/privacy/preferences
- * Get the current user's privacy preferences
+ * POST /api/privacy/stealth/recover
+ * Initiates stealth payment recovery from Stellar ledger using viewing key
+ * 
+ * This endpoint reconstructs a user's stealth payment history by:
+ * 1. Loading the user's viewing key and stealth meta address
+ * 2. Deriving all possible stealth addresses from subscriptions
+ * 3. Scanning Stellar ledger for payments to those addresses
+ * 4. Returning recovered payment history
+ * 
+ * Response is streamed as server-sent events (SSE) for progress updates
  */
-router.get('/preferences', async (req: AuthenticatedRequest, res: Response) => {
+router.post('/stealth/recover', (req: AuthenticatedRequest, res: Response) => {
+  const userId = req.user!.id;
+
   try {
-    const userId = req.user!.id;
-    const { data, error } = await supabase
-      .from('privacy_preferences')
-      .select('*')
-      .eq('user_id', userId)
-      .maybeSingle();
+    // Log recovery attempt
+    emitSecurityEvent(userId, 'stealth_recovery_initiated', {
+      ip: req.ip,
+      userAgent: req.headers['user-agent'],
+    }).catch(err => logger.error('Failed to log security event', { error: err }));
 
-    if (error) throw error;
+    // Set up SSE (Server-Sent Events) for progress streaming
+    res.setHeader('Content-Type', 'text/event-stream');
+    res.setHeader('Cache-Control', 'no-cache');
+    res.setHeader('Connection', 'keep-alive');
+    res.setHeader('Access-Control-Allow-Origin', '*');
 
-    // If no preferences exist, return defaults
-    if (!data) {
-      const defaults = {
-        user_id: userId,
-        privacy_mode: false,
-        stealth_addresses: false,
-        encrypt_on_chain: false,
-        payment_channels: false,
-        reminder_jitter: false,
-      };
-      res.json({ success: true, data: defaults });
-      return;
-    }
+    // Send initial connection confirmation
+    res.write('data: {"type":"connected","message":"Recovery stream connected"}\n\n');
 
-    res.json({ success: true, data });
+    // Execute scan asynchronously without blocking response
+    (async () => {
+      try {
+        const payments = await stealthScanner.scanHistoricalLedger(userId, '', (progress) => {
+          // Stream progress updates to client
+          res.write(
+            `data: ${JSON.stringify({
+              type: 'progress',
+              ...progress,
+            })}\n\n`
+          );
+        });
+
+        // Send final results
+        res.write(
+          `data: ${JSON.stringify({
+            type: 'complete',
+            payments,
+            count: payments.length,
+          })}\n\n`
+        );
+
+        res.end();
+      } catch (error) {
+        logger.error('Stealth recovery error', {
+          userId,
+          error: error instanceof Error ? error.message : String(error),
+        });
+
+        res.write(
+          `data: ${JSON.stringify({
+            type: 'error',
+            error: error instanceof Error ? error.message : 'Recovery failed',
+          })}\n\n`
+        );
+
+        res.end();
+      }
+    })();
   } catch (error) {
-    logger.error('Error fetching privacy preferences:', error);
+    logger.error('Stealth recovery endpoint error', {
+      userId,
+      error: error instanceof Error ? error.message : String(error),
+    });
+
     res.status(500).json({
-      success: false,
-      error: error instanceof Error ? error.message : 'Failed to fetch privacy preferences',
+      error: 'Recovery initialization failed',
     });
   }
 });
 
 /**
- * POST /api/privacy/preferences
- * Update the current user's privacy preferences
+ * GET /api/privacy/stealth/status
+ * Check if user has stealth payments configured
  */
-router.post('/preferences', async (req: AuthenticatedRequest, res: Response) => {
+router.get('/stealth/status', async (req: AuthenticatedRequest, res: Response) => {
   try {
     const userId = req.user!.id;
-    const {
-      privacy_mode,
-      stealth_addresses,
-      encrypt_on_chain,
-      payment_channels,
-      reminder_jitter,
-    } = req.body;
 
-    const updates: Record<string, unknown> = { user_id: userId };
-    if (typeof privacy_mode === 'boolean') updates.privacy_mode = privacy_mode;
-    if (typeof stealth_addresses === 'boolean') updates.stealth_addresses = stealth_addresses;
-    if (typeof encrypt_on_chain === 'boolean') updates.encrypt_on_chain = encrypt_on_chain;
-    if (typeof payment_channels === 'boolean') updates.payment_channels = payment_channels;
-    if (typeof reminder_jitter === 'boolean') updates.reminder_jitter = reminder_jitter;
-
-    const { data, error } = await supabase
-      .from('privacy_preferences')
-      .upsert(updates, { onConflict: 'user_id' })
-      .select()
+    const { data: profile } = await (req.app.locals.supabase || require('../config/database').supabase)
+      .from('profiles')
+      .select('stealth_meta_address, stellar_public_key')
+      .eq('id', userId)
       .single();
 
-    if (error) throw error;
-
-    logger.info('Privacy preferences updated', { userId });
-    res.json({ success: true, data });
-  } catch (error) {
-    logger.error('Error updating privacy preferences:', error);
-    res.status(500).json({
-      success: false,
-      error: error instanceof Error ? error.message : 'Failed to update privacy preferences',
+    res.json({
+      configured: !!profile?.stealth_meta_address,
+      hasPublicKey: !!profile?.stellar_public_key,
     });
-  }
-});
-
-/**
- * GET /api/privacy/global-flags
- * Get global privacy flag states (for SDK consumers)
- */
-router.get('/global-flags', async (req: AuthenticatedRequest, res: Response) => {
-  try {
-    const { data, error } = await supabase
-      .from('global_privacy_flags')
-      .select('flag_name, enabled');
-
-    if (error) throw error;
-
-    // Merge DB flags with defaults from config
-    const flagMap: Record<string, boolean> = {};
-    for (const flag of Object.keys(PRIVACY_FLAGS_CONFIG) as PrivacyFlag[]) {
-      flagMap[flag] = PRIVACY_FLAGS_CONFIG[flag].default;
-    }
-    for (const row of (data || [])) {
-      flagMap[row.flag_name] = !!row.enabled;
-    }
-
-    res.json({ success: true, data: flagMap });
   } catch (error) {
-    logger.error('Error fetching global privacy flags:', error);
-    res.status(500).json({
-      success: false,
-      error: error instanceof Error ? error.message : 'Failed to fetch global privacy flags',
+    logger.error('Stealth status check error', {
+      error: error instanceof Error ? error.message : String(error),
     });
-  }
-});
 
-/**
- * GET /api/privacy/feature/:flag
- * SDK helper: isPrivacyFeatureEnabled — returns boolean for a given flag for the authenticated user
- */
-router.get('/feature/:flag', async (req: AuthenticatedRequest, res: Response) => {
-  try {
-    const { flag } = req.params;
-    const userId = req.user!.id;
-
-    if (!(flag in PRIVACY_FLAGS_CONFIG)) {
-      res.status(400).json({ success: false, error: `Unknown flag: ${flag}` });
-      return;
-    }
-
-    const enabled = await privacyService.isPrivacyFeatureEnabled(userId, flag as PrivacyFlag);
-    res.json({ success: true, flag, enabled });
-  } catch (error) {
-    logger.error('Error checking privacy feature flag:', error);
     res.status(500).json({
-      success: false,
-      error: error instanceof Error ? error.message : 'Failed to check feature flag',
+      error: 'Status check failed',
     });
   }
 });

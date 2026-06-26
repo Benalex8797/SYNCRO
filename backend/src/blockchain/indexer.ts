@@ -12,11 +12,34 @@
 
 import logger from '../config/logger';
 import { supabase } from '../config/database';
+import { RpcClient } from '../../../shared/src/rpc-client';
+import {
+  getBlockchainFlags,
+  resolveStellarNetwork,
+} from '../../../shared/blockchain-flags';
 
 // ── Constants ─────────────────────────────────────────────────────────────────
 
-const RPC_URL =
-  process.env.SOROBAN_RPC_URL ?? 'https://soroban-testnet.stellar.org';
+const _flags = getBlockchainFlags();
+const _network = resolveStellarNetwork();
+
+// Resolve RPC URL — never silently fall back to testnet in production.
+function resolveRpcUrl(): string {
+  const configured = process.env.SOROBAN_RPC_URL;
+  if (!configured && _flags.isProduction) {
+    throw new Error(
+      '[indexer] SOROBAN_RPC_URL must be explicitly set in production. ' +
+        'Refusing to fall back to the testnet RPC endpoint.',
+    );
+  }
+  if (configured) return configured;
+  // Non-production: pick a sensible default per network
+  if (_network === 'mainnet') return 'https://soroban-rpc.creit.tech';
+  if (_network === 'futurenet') return 'https://rpc-futurenet.stellar.org';
+  return 'https://soroban-testnet.stellar.org';
+}
+
+const RPC_URL = resolveRpcUrl();
 const CONTRACT_ID = process.env.SOROBAN_CONTRACT_ADDRESS ?? '';
 const POLL_INTERVAL_MS = parseInt(
   process.env.INDEXER_POLL_INTERVAL_MS ?? '6000',
@@ -25,6 +48,14 @@ const POLL_INTERVAL_MS = parseInt(
 const BATCH_SIZE = parseInt(process.env.INDEXER_BATCH_SIZE ?? '200', 10);
 const MAX_RETRIES = 5;
 const BASE_RETRY_MS = 1000;
+
+const rpcClient = new RpcClient({
+  maxRetries: MAX_RETRIES,
+  baseRetryDelayMs: BASE_RETRY_MS,
+  timeoutMs: 15000,
+  circuitBreakerThreshold: 5,
+  circuitBreakerResetTimeoutMs: 30000,
+});
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -42,31 +73,23 @@ interface RawEvent {
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
 async function rpcPost<T>(method: string, params: unknown): Promise<T> {
-  let lastErr: unknown;
-  for (let attempt = 0; attempt < MAX_RETRIES; attempt++) {
-    try {
-      const res = await fetch(RPC_URL, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ jsonrpc: '2.0', id: 1, method, params }),
-      });
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      const json: any = await res.json();
-      if (json.error) throw new Error(json.error.message ?? JSON.stringify(json.error));
-      return json.result as T;
-    } catch (err) {
-      lastErr = err;
-      const delay =
-        BASE_RETRY_MS * Math.pow(2, attempt) * (0.8 + Math.random() * 0.4);
-      logger.warn(`Indexer RPC retry ${attempt + 1}/${MAX_RETRIES}`, {
-        method,
-        delay,
-        err: err instanceof Error ? err.message : String(err),
-      });
-      await sleep(delay);
-    }
+  try {
+    const res = await rpcClient.fetch(RPC_URL, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ jsonrpc: '2.0', id: 1, method, params }),
+    });
+    const json: any = await res.json();
+    if (json.error) throw new Error(json.error.message ?? JSON.stringify(json.error));
+    return json.result as T;
+  } catch (err) {
+    logger.error('Indexer RPC call failed', {
+      method,
+      err: err instanceof Error ? err.message : String(err),
+      metrics: rpcClient.getMetrics(),
+    });
+    throw err;
   }
-  throw lastErr;
 }
 
 async function getLatestLedger(): Promise<number> {
@@ -182,8 +205,14 @@ export async function startIndexer(): Promise<void> {
     return;
   }
 
+  // Honour the ENABLE_BLOCKCHAIN master switch
+  if (!_flags.blockchainEnabled) {
+    logger.warn('Indexer: ENABLE_BLOCKCHAIN=false — indexer disabled');
+    return;
+  }
+
   running = true;
-  logger.info('Indexer: started', { rpcUrl: RPC_URL, contractId: CONTRACT_ID });
+  logger.info('Indexer: started', { rpcUrl: RPC_URL, contractId: CONTRACT_ID, network: _network });
 
   while (running) {
     try {

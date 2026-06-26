@@ -6,6 +6,7 @@ import { recoveryCodeService } from '../services/mfa-service';
 import { TotpRateLimiter } from '../lib/totp-rate-limiter';
 import { createMfaLimiter } from '../middleware/rate-limit-factory';
 import logger from '../config/logger';
+import { emitSecurityEvent } from '../services/audit-service';
 import { verifyRecoveryCodeSchema, mfaNotifySchema, requireTwoFaSchema } from '../schemas/mfa';
 
 const router: Router = Router();
@@ -49,7 +50,26 @@ router.post(
       if (!valid) {
         totpRateLimiter.recordFailure(sessionId);
 
-        if (totpRateLimiter.isLocked(sessionId)) {
+        const locked = totpRateLimiter.isLocked(sessionId);
+        await emitSecurityEvent('mfa.recovery_code_failed', {
+          severity: locked ? 'high' : 'medium',
+          actorId: req.user!.id,
+          resourceType: 'mfa',
+          reason: locked ? 'MFA lockout threshold reached' : 'Invalid recovery code',
+          ipAddress: req.ip,
+          userAgent: req.headers['user-agent'] as string | undefined,
+          details: { locked },
+        });
+
+        if (locked) {
+          await emitSecurityEvent('mfa.failure_threshold_reached', {
+            severity: 'high',
+            actorId: req.user!.id,
+            resourceType: 'mfa',
+            reason: 'Recovery code failure threshold exceeded',
+            ipAddress: req.ip,
+            userAgent: req.headers['user-agent'] as string | undefined,
+          });
           return res.status(429).json({
             success: false,
             error: 'Too many failed attempts. Please try again later.',

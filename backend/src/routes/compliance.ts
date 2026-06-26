@@ -1,12 +1,14 @@
 import { Router, Request, Response } from 'express';
 import archiver from 'archiver';
 import { authenticate, AuthenticatedRequest } from '../middleware/auth';
+import { requireRole } from '../middleware/rbac';
 import { validate } from '../middleware/validate';
 import { complianceService } from '../services/compliance-service';
 import { supabase } from '../config/database';
 import logger from '../config/logger';
 import { RateLimiterFactory } from '../middleware/rate-limit-factory';
 import { deleteAccountSchema, emailPreferencesSchema, KNOWN_OPT_IN_KEYS } from '../schemas/compliance';
+import { UnauthorizedError } from '../errors';
 
 const router: Router = Router();
 
@@ -103,6 +105,7 @@ router.get('/export', authenticate, exportRateLimit, async (req: AuthenticatedRe
     archive.append(JSON.stringify(data.emailAccounts, null, 2), { name: 'email_accounts.json' });
     archive.append(JSON.stringify(data.teams, null, 2), { name: 'teams.json' });
     archive.append(JSON.stringify(data.blockchainLogs, null, 2), { name: 'blockchain_logs.json' });
+    archive.append(JSON.stringify(data.blindingFactors, null, 2), { name: 'blinding_factors.json' });
 
     const readme = [
       'Syncro — Personal Data Export',
@@ -119,6 +122,7 @@ router.get('/export', authenticate, exportRateLimit, async (req: AuthenticatedRe
       '  email_accounts.json — Connected email accounts',
       '  teams.json          — Team membership records',
       '  blockchain_logs.json — On-chain contract events and renewal approvals',
+      '  blinding_factors.json — Pedersen commitment blinding factors for audit data',
       '',
       'For questions or deletion requests, contact support.',
     ].join('\n');
@@ -152,6 +156,7 @@ router.get('/export', authenticate, exportRateLimit, async (req: AuthenticatedRe
 router.post(
   '/account/delete',
   authenticate,
+  requireRole('owner'),
   validate(deleteAccountSchema),
   async (req: AuthenticatedRequest, res: Response) => {
     const userId = req.user!.id;
@@ -170,7 +175,7 @@ router.post(
   },
 );
 
-router.post('/account/delete/cancel', authenticate, async (req: AuthenticatedRequest, res: Response) => {
+router.post('/account/delete/cancel', authenticate, requireRole('owner'), async (req: AuthenticatedRequest, res: Response) => {
   const result = await complianceService.cancelDeletion(req.user!.id);
   res.json({ success: true, data: result });
 });

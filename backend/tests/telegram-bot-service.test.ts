@@ -3,12 +3,11 @@
  * Tests for Telegram notification delivery
  */
 
-import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { TelegramBotService } from '../src/services/telegram-bot-service';
 import { NotificationPayload } from '../src/types/reminder';
 
 // Mock fetch globally
-global.fetch = vi.fn();
+(global as any).fetch = jest.fn();
 
 describe('TelegramBotService', () => {
     let service: TelegramBotService;
@@ -17,13 +16,14 @@ describe('TelegramBotService', () => {
     const mockUserId = 'user-123';
 
     beforeEach(() => {
-        vi.clearAllMocks();
+        jest.clearAllMocks();
         service = new TelegramBotService({ botToken: mockBotToken });
     });
 
     afterEach(() => {
-        vi.restoreAllMocks();
+        jest.restoreAllMocks();
     });
+
 
     describe('Configuration', () => {
         it('should be configured with bot token', () => {

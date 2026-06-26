@@ -2,10 +2,11 @@ import Stripe from "stripe"
 import { createClient } from "./supabase/server"
 import { getStripeInstance } from "./stripe-config"
 import { getPayPalService } from "./paypal-service"
+import { getPaystackService } from "./paystack-service"
 import { isPaymentProviderEnabled } from "./feature-flags"
 
 export interface PaymentConfig {
-  provider: "stripe" | "paypal" | "mock"
+  provider: "stripe" | "paypal" | "mock" | "paystack"
   apiKey?: string
 }
 
@@ -50,6 +51,8 @@ export class PaymentService {
         result = await this.processStripePayment(amount, currency, paymentMethodId)
       } else if (this.provider === "paypal") {
         result = await this.processPayPalPayment(amount, currency, paymentMethodId, metadata)
+      } else if (this.provider === "paystack") {
+        result = await this.processPaystackPayment(amount, currency, paymentMethodId, metadata)
       } else if (this.provider === "mock") {
         result = await this.processMockPayment(amount, currency)
       } else {
@@ -72,7 +75,7 @@ export class PaymentService {
           plan_name: metadata.planName,
         })
       } else if (result.requiresAction) {
-        // Save as pending for PayPal orders that need user approval
+        // Save as pending — user still needs to complete the redirect flow
         await this.savePaymentToDatabase({
           amount,
           currency,
@@ -207,6 +210,72 @@ export class PaymentService {
     }
   }
 
+  private async processPaystackPayment(
+    amount: number,
+    _currency: string,
+    paymentMethodId: string,
+    metadata: any = {}
+  ): Promise<PaymentResult> {
+    const paystackService = getPaystackService()
+
+    if (!paystackService) {
+      return {
+        success: false,
+        transactionId: "",
+        error: "Paystack is not configured. Please set PAYSTACK_SECRET_KEY.",
+      }
+    }
+
+    try {
+      // If paymentMethodId starts with "ref_", this is a verification call
+      // after the user returns from the Paystack-hosted checkout page
+      if (paymentMethodId.startsWith('ref_')) {
+        const reference = paymentMethodId.replace('ref_', '')
+        const verification = await paystackService.verifyTransaction(reference)
+
+        if (verification.status === 'success') {
+          return { success: true, transactionId: reference }
+        }
+
+        return {
+          success: false,
+          transactionId: reference,
+          error: `Payment verification failed with status: ${verification.status}`,
+        }
+      }
+
+      // Otherwise initialize a new transaction — user will be redirected to
+      // the Paystack-hosted checkout page
+      const reference = `syncro_${metadata.userId}_${Date.now()}`
+      const appUrl = process.env.NEXT_PUBLIC_APP_URL || 'http://localhost:3000'
+
+      const init = await paystackService.initializeTransaction({
+        email: metadata.userEmail,
+        amountKobo: Math.round(amount * 100), // convert to kobo (100 kobo = ₦1)
+        reference,
+        metadata: {
+          userId: metadata.userId,
+          planName: metadata.planName,
+          callbackUrl: `${appUrl}/payments/paystack/callback`,
+        },
+      })
+
+      return {
+        success: true,
+        transactionId: reference,
+        requiresAction: true,
+        actionUrl: init.authorization_url,
+      }
+    } catch (error) {
+      console.error('[PaymentService] Paystack payment error:', error)
+      return {
+        success: false,
+        transactionId: "",
+        error: error instanceof Error ? error.message : "Paystack payment failed",
+      }
+    }
+  }
+
   private async processMockPayment(amount: number, currency: string): Promise<PaymentResult> {
     // Mock payments only allowed in development or if explicitly enabled
     if (!isPaymentProviderEnabled('mock')) {
@@ -228,12 +297,34 @@ export class PaymentService {
   private async savePaymentToDatabase(paymentData: any) {
     try {
       const supabase = await createClient()
-      const { error } = await supabase.from("payments").insert(paymentData)
-      if (error) throw error
+      
+      // Check if payment already exists (idempotency)
+      const { data: existing } = await supabase
+        .from("payments")
+        .select("id")
+        .eq("transaction_id", paymentData.transaction_id)
+        .single()
+
+      if (existing) {
+        console.log('[PaymentService] Payment already exists, updating:', paymentData.transaction_id)
+        const { error } = await supabase
+          .from("payments")
+          .update({
+            ...paymentData,
+            updated_at: new Date().toISOString(),
+          })
+          .eq("transaction_id", paymentData.transaction_id)
+        
+        if (error) throw error
+      } else {
+        console.log('[PaymentService] Creating new payment record:', paymentData.transaction_id)
+        const { error } = await supabase.from("payments").insert(paymentData)
+        if (error) throw error
+      }
     } catch (error) {
-      console.error("Failed to save payment to database:", error)
-      // We don't want to fail the whole payment if only the logging fails,
-      // but ideally this should be handled by webhooks anyway.
+      console.error("[PaymentService] Failed to save payment to database:", error)
+      // We don't want to fail the whole payment if only the logging fails.
+      // Webhooks are the reliable source of truth for payment status.
     }
   }
 
@@ -274,6 +365,16 @@ export class PaymentService {
           .eq("transaction_id", transactionId)
 
         return { success: true, transactionId: refund.id }
+      } else if (this.provider === "paystack") {
+        // Paystack does not support programmatic refunds for NGN wallet-funding
+        // transactions. Refunds must be processed manually via the Paystack
+        // dashboard at https://dashboard.paystack.com
+        return {
+          success: false,
+          transactionId: "",
+          error:
+            "Paystack refunds must be processed manually via the Paystack dashboard.",
+        }
       } else if (this.provider === "mock") {
         // Mock refund
         if (!isPaymentProviderEnabled('mock')) {

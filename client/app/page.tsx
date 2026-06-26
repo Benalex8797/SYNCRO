@@ -2,15 +2,15 @@
  * Home page — server component.
  */
 
-import { Suspense } from "react";
-import { getInitialData } from "./page-data";
-import { AppClient } from "@/components/app/app-client";
-import { LoadingSpinner } from "@/components/ui/loading-spinner";
+import { Suspense } from 'react'
+import { getInitialData } from './page-data'
+import { AppClient } from '@/components/app/app-client'
+import { LoadingSpinner } from '@/components/ui/loading-spinner'
 
-export const dynamic = "force-dynamic";
+export const dynamic = 'force-dynamic'
 
 export default async function HomePage() {
-  const initialData = await getInitialData();
+  const initialData = await getInitialData()
 
   return (
     <Suspense
@@ -30,5 +30,5 @@ export default async function HomePage() {
         isDemo={initialData.isDemo}
       />
     </Suspense>
-  );
+  )
 }

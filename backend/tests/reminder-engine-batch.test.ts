@@ -17,6 +17,7 @@ jest.mock('../src/config/database', () => ({
 
 jest.mock('../src/config/logger', () => ({
   info: jest.fn(),
+  warn: jest.fn(),
   error: jest.fn(),
   debug: jest.fn(),
 }));
@@ -31,14 +32,14 @@ describe('ReminderEngine Batch Optimization', () => {
 
   it('should batch fetch process and batch upsert reminders', async () => {
     const mockSubscriptions = [
-      { id: 'sub1', user_id: 'user1', active_until: '2026-04-01T00:00:00Z' },
-      { id: 'sub2', user_id: 'user1', active_until: '2026-04-01T00:00:00Z' },
-      { id: 'sub3', user_id: 'user2', active_until: '2026-04-01T00:00:00Z' },
+      { id: 'sub1', user_id: 'user1', active_until: '2026-06-15T00:00:00Z' },
+      { id: 'sub2', user_id: 'user1', active_until: '2026-06-15T00:00:00Z' },
+      { id: 'sub3', user_id: 'user2', active_until: '2026-06-15T00:00:00Z' },
     ];
 
     const mockPreferences = [
-      { user_id: 'user1', reminder_days_before: [7, 3] },
-      { user_id: 'user2', reminder_days_before: [1] },
+      { user_id: 'user1', reminder_timing: [7, 3] },
+      { user_id: 'user2', reminder_timing: [1] },
     ];
 
     // Setup mocks
@@ -54,7 +55,7 @@ describe('ReminderEngine Batch Optimization', () => {
           }),
         };
       }
-      if (table === 'reminder_settings') {
+      if (table === 'user_preferences') {
         return {
           select: () => ({
             in: () => Promise.resolve({ data: mockPreferences, error: null }),
@@ -71,7 +72,7 @@ describe('ReminderEngine Batch Optimization', () => {
     await engine.scheduleReminders([7, 3, 1]);
 
     // Verify batch fetch of preferences
-    expect(supabase.from).toHaveBeenCalledWith('reminder_settings');
+    expect(supabase.from).toHaveBeenCalledWith('user_preferences');
     
     // Verify batch upsert
     expect(supabase.from).toHaveBeenCalledWith('reminder_schedules');

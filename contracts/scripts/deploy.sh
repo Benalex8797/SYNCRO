@@ -42,6 +42,14 @@ LOGGING_ID=$(stellar contract deploy \
   --network "$NETWORK")
 echo "  SubscriptionLogging: $LOGGING_ID"
 
+# Deploy ZkPaymentVerifier
+echo "  Deploying ZkPaymentVerifier..."
+ZK_VERIFIER_ID=$(stellar contract deploy \
+  --wasm "$WASM_DIR/zk_payment_verifier.wasm" \
+  --source "$SECRET_KEY" \
+  --network "$NETWORK")
+echo "  ZkPaymentVerifier: $ZK_VERIFIER_ID"
+
 echo ""
 echo "==> Running initialization..."
 bash "$(dirname "$0")/init.sh" "$NETWORK" "$SECRET_KEY" "$RENEWAL_ID" "$LOGGING_ID"
@@ -51,6 +59,7 @@ echo "==> Add to backend/.env:"
 echo "SOROBAN_REGISTRY_ADDRESS=$REGISTRY_ID"
 echo "SOROBAN_RENEWAL_ADDRESS=$RENEWAL_ID"
 echo "SOROBAN_LOGGING_ADDRESS=$LOGGING_ID"
+echo "SOROBAN_ZK_VERIFIER_ADDRESS=$ZK_VERIFIER_ID"
 
 # Write addresses to a local file for reference
 OUTPUT_FILE="$(dirname "$0")/deployed-addresses-${NETWORK}.env"
@@ -59,6 +68,7 @@ cat > "$OUTPUT_FILE" <<EOF
 SOROBAN_REGISTRY_ADDRESS=$REGISTRY_ID
 SOROBAN_RENEWAL_ADDRESS=$RENEWAL_ID
 SOROBAN_LOGGING_ADDRESS=$LOGGING_ID
+SOROBAN_ZK_VERIFIER_ADDRESS=$ZK_VERIFIER_ID
 EOF
 echo ""
 echo "Addresses saved to $OUTPUT_FILE"

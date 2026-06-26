@@ -15,6 +15,7 @@ export interface UserExportData {
     contractEvents: any[];
     renewalApprovals: any[];
   };
+  blindingFactors: any[];
 }
 
 interface TokenVerificationResult {
@@ -86,6 +87,7 @@ export class ComplianceService {
       teamsResult,
       contractEventsResult,
       renewalApprovalsResult,
+      blindingFactorsResult,
     ] = await Promise.all([
       supabase.from('profiles').select('*').eq('id', userId).single(),
       supabase.from('subscriptions').select('*').eq('user_id', userId),
@@ -96,6 +98,7 @@ export class ComplianceService {
       supabase.from('team_members').select('*').eq('user_id', userId),
       supabase.from('contract_events').select('*').eq('user_id', userId),
       supabase.from('renewal_approvals').select('*').eq('user_id', userId),
+      supabase.from('commitment_blinding_factors').select('*').eq('user_id', userId),
     ]);
 
     return {
@@ -110,6 +113,7 @@ export class ComplianceService {
         contractEvents: contractEventsResult.data || [],
         renewalApprovals: renewalApprovalsResult.data || [],
       },
+      blindingFactors: blindingFactorsResult.data || [],
     };
   }
 

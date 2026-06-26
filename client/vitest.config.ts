@@ -1,3 +1,4 @@
+import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -11,54 +12,13 @@ import react from '@vitejs/plugin-react';
 const dirname =
   typeof __dirname !== 'undefined' ? __dirname : path.dirname(fileURLToPath(import.meta.url));
 
-// More info at: https://storybook.js.org/docs/next/writing-tests/integrations/vitest-addon
-export default defineConfig({
-  plugins: [react()],
-  resolve: {
-    alias: {
-      '@': path.resolve(dirname, './'),
-    },
-  },
-  test: {
-    globals: true,
-    environment: 'jsdom',
-    setupFiles: ['./lib/test-utils/setup.ts'],
-    include: ['**/*.{test,spec}.{ts,tsx}'],
-    exclude: ['node_modules', '.storybook', 'stories', 'e2e', '.next'],
-    coverage: {
-      provider: 'v8',
-      reporter: ['text', 'html', 'json-summary', 'lcov'],
-      exclude: [
-        'node_modules/',
-        '.storybook/',
-        '**/*.stories.tsx',
-        '**/*.stories.ts',
-        '**/*.config.ts',
-        '**/*.config.js',
-        '**/*.config.mjs',
-        '**/types.ts',
-        '**/types.d.ts',
-        '**/*.d.ts',
-        'e2e/',
-        'stories/',
-        'public/',
-        '.next/',
-        'coverage/',
-      ],
-      thresholds: {
-        lines: 80,
-        branches: 75,
-        functions: 85,
-        statements: 80,
-      },
-    },
-    projects: [
+const storybookConfigDir = path.join(dirname, '.storybook');
+const storybookProjects = process.env.VITEST_STORYBOOK === '1' && fs.existsSync(storybookConfigDir)
+  ? [
       {
         extends: true,
         plugins: [
-          // The plugin will run tests for the stories defined in your Storybook config
-          // See options at: https://storybook.js.org/docs/next/writing-tests/integrations/vitest-addon#storybooktest
-          storybookTest({ configDir: path.join(dirname, '.storybook') }),
+          storybookTest({ configDir: storybookConfigDir }),
         ],
         test: {
           name: 'storybook',
@@ -70,6 +30,55 @@ export default defineConfig({
           },
         },
       },
+    ]
+  : [];
+
+// More info at: https://storybook.js.org/docs/next/writing-tests/integrations/vitest-addon
+const defaultTestConfig = {
+  globals: true,
+  environment: 'jsdom',
+  setupFiles: ['./lib/test-utils/setup.ts'],
+  include: ['**/*.{test,spec}.{ts,tsx}'],
+  exclude: ['node_modules', '.storybook', 'stories', 'e2e', '.next'],
+  coverage: {
+    provider: 'v8',
+    reporter: ['text', 'html', 'json-summary', 'lcov'],
+    exclude: [
+      'node_modules/',
+      '.storybook/',
+      '**/*.stories.tsx',
+      '**/*.stories.ts',
+      '**/*.config.ts',
+      '**/*.config.js',
+      '**/*.config.mjs',
+      '**/types.ts',
+      '**/*.types.d.ts',
+      '**/*.d.ts',
+      'e2e/',
+      'stories/',
+      'public/',
+      '.next/',
+      'coverage/',
     ],
+    thresholds: {
+      lines: 80,
+      branches: 75,
+      functions: 85,
+      statements: 80,
+    },
   },
+};
+
+if (storybookProjects.length > 0) {
+  defaultTestConfig.projects = storybookProjects;
+}
+
+export default defineConfig({
+  plugins: [react()],
+  resolve: {
+    alias: {
+      '@': path.resolve(dirname, './'),
+    },
+  },
+  test: defaultTestConfig,
 });

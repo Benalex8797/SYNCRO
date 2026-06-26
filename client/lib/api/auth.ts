@@ -25,6 +25,21 @@ export async function getAuthenticatedUser(request: NextRequest) {
   return user
 }
 
+export type AuthenticatedUser = NonNullable<Awaited<ReturnType<typeof getAuthenticatedUser>>>
+
+/**
+ * Assert that route infrastructure supplied an authenticated user.
+ * This keeps auth failure responses consistent even when route handlers are
+ * tested with mocked auth functions.
+ */
+export function assertAuthenticatedUser(
+  user: Awaited<ReturnType<typeof getAuthenticatedUser>> | null | undefined
+): asserts user is AuthenticatedUser {
+  if (!user) {
+    throw ApiErrors.unauthorized('Invalid or expired session')
+  }
+}
+
 /**
  * Create request context from request
  */
@@ -65,18 +80,26 @@ export const ROLE_HIERARCHY: Record<UserRole, number> = {
 
 async function getUserRole(userId: string): Promise<UserRole> {
   const supabase = await createClient()
-  
-  const { data, error } = await supabase
+
+  // Primary: authoritative user_roles table (replaces user_metadata.role)
+  const { data: roleRow, error: roleError } = await supabase
+    .from('user_roles')
+    .select('role')
+    .eq('user_id', userId)
+    .single()
+
+  if (!roleError && roleRow?.role) {
+    return roleRow.role as UserRole
+  }
+
+  // Fallback: profiles.role for users not yet in user_roles
+  const { data: profile } = await supabase
     .from('profiles')
     .select('role')
     .eq('id', userId)
     .single()
 
-  if (error || !data?.role) {
-    return 'user'
-  }
-
-  return data.role as UserRole
+  return (profile?.role as UserRole) || 'user'
 }
 
 export async function requireRole(

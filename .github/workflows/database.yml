@@ -4,13 +4,13 @@ on:
   push:
     branches: [main, develop]
     paths:
-      - 'supabase/migrations/**'
-      - 'supabase/config.toml'
+      - "supabase/migrations/**"
+      - "supabase/config.toml"
   pull_request:
     branches: [main, develop]
     paths:
-      - 'supabase/migrations/**'
-      - 'supabase/config.toml'
+      - "supabase/migrations/**"
+      - "supabase/config.toml"
 
 jobs:
   validate-migrations:
@@ -19,7 +19,7 @@ jobs:
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
 
       - name: Setup Supabase CLI
         uses: supabase/setup-cli@v2
@@ -38,17 +38,38 @@ jobs:
       - name: Setup Node.js for RLS audit
         uses: actions/setup-node@v6
         with:
-          node-version: '20'
-          cache: 'npm'
+          node-version: "20"
+          cache: "npm"
           cache-dependency-path: backend/package-lock.json
 
       - name: Install dependencies for RLS audit
         working-directory: backend
-        run: npm ci
+        run: npm install
+
+      - name: Run migration drift check against local database
+        id: local-drift-check
+        # Official Supabase demo service role key — only valid for localhost:54321
+        env:
+          SUPABASE_URL: http://localhost:54321
+          SUPABASE_SERVICE_ROLE_KEY: eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZS1kZW1vIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImV4cCI6MTk4MzgxMjk5Nn0.EGIM96RAZx35lJzdJsyH-qQwv8Hdp7fsn3W0YpN81IU
+        run: |
+          echo "🔍 Verifying migration state against local database..."
+          node scripts/check-migration-drift.js --verify-db --env local --json > local-drift-result.json 2>&1 || true
+          cat local-drift-result.json
+          node -e "
+            const r = JSON.parse(require('fs').readFileSync('local-drift-result.json', 'utf8'));
+            if (!r.success) {
+              console.error('❌ Local database drift detected:');
+              (r.dbCheck?.issues || []).forEach(i => console.error('  [' + i.type + '] ' + i.message));
+              process.exit(1);
+            }
+            console.log('✅ Local database migration state matches filesystem (' + (r.dbCheck?.appliedCount ?? '?') + ' applied)');
+          "
 
       - name: Run RLS Policy Audit
         env:
           SUPABASE_URL: http://localhost:54321
+          # Official Supabase demo token for local CI - only works with localhost:54321
           SUPABASE_SERVICE_ROLE_KEY: eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZS1kZW1vIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImV4cCI6MTk4MzgxMjk5Nn0.EGIM96RAZx35lJzdJsyH-qQwv8Hdp7fsn3W0YpN81IU
         run: |
           echo "🔍 Auditing RLS policies after migration..."
@@ -56,4 +77,4 @@ jobs:
 
       - name: Stop Supabase local stack
         if: always()
-        run: supabase stop
+        run: if command -v supabase &> /dev/null; then supabase stop; fi

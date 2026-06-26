@@ -11,6 +11,8 @@ import { supabase } from '../config/database';
 import { suggestionService } from './suggestion-service';
 import { idempotencyService } from './idempotency';
 import { subscriptionService } from './subscription-service';
+import { jobAlertService } from './job-alert-service';
+import { agentWalletRotationService } from './agent-wallet-rotation';
 
 export class SchedulerService {
   private jobs: cron.ScheduledTask[] = [];
@@ -23,7 +25,9 @@ export class SchedulerService {
       cron.schedule('0 9 * * *', async () => {
         logger.info('Running scheduled reminder processing');
         try {
-          await reminderEngine.processReminders();
+          await jobAlertService.runMonitoredJob('reminder-processing', () =>
+            reminderEngine.processReminders(),
+          );
         } catch (error) {
           logger.error('Error in scheduled reminder processing:', error);
         }
@@ -35,8 +39,10 @@ export class SchedulerService {
       cron.schedule('0 0 * * *', async () => {
         logger.info('Running scheduled reminder scheduling');
         try {
-          await reminderEngine.scheduleReminders();
-          await reminderEngine.scheduleTrialReminders();
+          await jobAlertService.runMonitoredJob('reminder-scheduling', async () => {
+            await reminderEngine.scheduleReminders();
+            await reminderEngine.scheduleTrialReminders();
+          });
         } catch (error) {
           logger.error('Error in scheduled reminder scheduling:', error);
         }
@@ -48,7 +54,9 @@ export class SchedulerService {
       cron.schedule('*/30 * * * *', async () => {
         logger.info('Running scheduled retry processing');
         try {
-          await reminderEngine.processRetries();
+          await jobAlertService.runMonitoredJob('reminder-retries', () =>
+            reminderEngine.processRetries(),
+          );
         } catch (error) {
           logger.error('Error in scheduled retry processing:', error);
         }
@@ -90,7 +98,9 @@ export class SchedulerService {
       cron.schedule('0 2 * * *', async () => {
         logger.info('Running scheduled expiry processing');
         try {
-          await expiryService.processExpiries();
+          await jobAlertService.runMonitoredJob('expiry-processing', () =>
+            expiryService.processExpiries(),
+          );
         } catch (error) {
           logger.error('Error in scheduled expiry processing:', error);
         }
@@ -113,7 +123,9 @@ export class SchedulerService {
       cron.schedule('*/5 * * * *', async () => {
         logger.info('Running scheduled webhook retry processing');
         try {
-          await webhookService.processRetries();
+          await jobAlertService.runMonitoredJob('webhook-retries', () =>
+            webhookService.processRetries(),
+          );
         } catch (error) {
           logger.error('Error in scheduled webhook retry processing:', error);
         }
@@ -194,6 +206,49 @@ export class SchedulerService {
           logger.info(`Idempotency key cleanup completed: ${deleted} keys deleted`);
         } catch (error) {
           logger.error('Error in idempotency key cleanup:', error);
+        }
+      }),
+    );
+
+    // ── Agent wallet rotation ─────────────────────────────────────────────
+    // The rotation service respects AGENT_ROTATION_SCHEDULE. When the schedule
+    // is "daily" or "weekly" the cron fires at the appropriate cadence but the
+    // service itself decides whether a rotation is actually due, so running
+    // both jobs is safe — the extra trigger for weekly rotations is a no-op
+    // on non-rotation days.
+
+    // Daily check at 00:05 UTC (shortly after midnight to avoid contention)
+    this.jobs.push(
+      cron.schedule('5 0 * * *', async () => {
+        logger.info('Running daily agent wallet rotation check');
+        try {
+          const results = await agentWalletRotationService.rotateAll(false);
+          if (results.length > 0) {
+            logger.info(`Agent wallet rotation: rotated ${results.length} agent(s)`, {
+              agents: results.map((r) => r.agentName),
+            });
+          } else {
+            logger.info('Agent wallet rotation: no rotations due');
+          }
+        } catch (error) {
+          logger.error('Error in agent wallet rotation job:', error);
+        }
+      }),
+    );
+
+    // Weekly check on Mondays at 00:10 UTC (belt-and-suspenders for weekly schedule)
+    this.jobs.push(
+      cron.schedule('10 0 * * 1', async () => {
+        logger.info('Running weekly agent wallet rotation check');
+        try {
+          const results = await agentWalletRotationService.rotateAll(false);
+          if (results.length > 0) {
+            logger.info(`Agent wallet rotation (weekly): rotated ${results.length} agent(s)`, {
+              agents: results.map((r) => r.agentName),
+            });
+          }
+        } catch (error) {
+          logger.error('Error in weekly agent wallet rotation job:', error);
         }
       }),
     );

@@ -1,7 +1,7 @@
 {
   "compilerOptions": {
     "target": "ES2022",
-    "module": "Node16",
+    "module": "commonjs",
     "lib": [
       "ES2022"
     ],
@@ -11,16 +11,17 @@
     "skipLibCheck": true,
     "forceConsistentCasingInFileNames": true,
     "resolveJsonModule": true,
-    "moduleResolution": "node16",
+    "moduleResolution": "node",
     "declaration": true,
     "declarationMap": true,
     "sourceMap": true,
+    "isolatedModules": true,
     "types": [
       "node",
       "jest"
     ]
   },
-  "include": [ "src/**/*", "services/subscription-classifier.js", "tests/**/*.ts"],
+  "include": [ "src/**/*", "tests/**/*.ts"],
   "exclude": [
     "node_modules",
     "dist",

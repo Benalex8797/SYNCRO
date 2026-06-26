@@ -24,12 +24,12 @@ describe('Subscription Retention & Soft Delete', () => {
   describe('purgeDeletedSubscriptions', () => {
     it('should delete subscriptions older than 30 days', async () => {
       const result = await subscriptionService.purgeDeletedSubscriptions(30);
-      
+
       expect(supabase.from).toHaveBeenCalledWith('subscriptions');
       expect(supabase.delete).toHaveBeenCalledWith({ count: 'exact' });
       expect(supabase.eq).toHaveBeenCalledWith('status', 'deleted');
       expect(supabase.lt).toHaveBeenCalled();
-      
+
       expect(result.deletedCount).toBe(5);
     });
   });

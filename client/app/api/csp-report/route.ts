@@ -20,15 +20,15 @@ const CspReportSchema = z.object({
 
 /**
  * CSP Violation Report Endpoint
- * 
+ *
  * Receives Content Security Policy violation reports from browsers.
  * These reports help identify policy violations without blocking content (report-only mode).
- * 
+ *
  * Violations are:
  * 1. Persisted to the database for historical analysis
  * 2. Sent to Sentry for real-time monitoring and alerting
  * 3. Aggregated for trend detection and policy tuning
- * 
+ *
  * After 1 week of clean reports, switch to enforcing mode in middleware.ts
  * See: docs/CSP_POLICY_TUNING.md for the complete workflow
  */
@@ -46,11 +46,11 @@ export async function POST(request: NextRequest) {
     windowStart = now;
     reportCount = 0;
   }
-  
+
   if (reportCount >= MAX_REPORTS_PER_WINDOW) {
     return NextResponse.json({ success: false, error: 'Rate limit exceeded' }, { status: 429 });
   }
-  
+
   reportCount++;
 
   try {
@@ -73,7 +73,7 @@ export async function POST(request: NextRequest) {
     // Redact IP address for privacy
     const rawIp = request.headers.get("x-forwarded-for")?.split(",")[0].trim() ||
       request.headers.get("x-real-ip");
-    
+
     // Simple redaction: only keep the first half of the IP or use a static string
     const redactedIp = rawIp ? '[REDACTED]' : undefined;
 

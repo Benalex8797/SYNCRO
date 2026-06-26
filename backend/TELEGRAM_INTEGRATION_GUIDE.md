@@ -691,3 +691,24 @@ Already implemented in `backend/src/config/database.ts`
 **Last Updated:** April 27, 2026  
 **Version:** 1.0.0  
 **Maintainer:** SYNCRO Development Team
+
+---
+
+## Interactive Commands (Issue #652)
+
+Beyond reminder delivery, the bot supports interactive commands for querying and managing subscriptions directly from Telegram.
+
+### Available Commands
+
+| Command | Description | Required Role |
+|---|---|---|
+| `/subs` | List all active subscriptions with monthly cost | Any linked account |
+| `/renewals` | Show upcoming renewals in the next 30 days | Any linked account (viewer+) |
+| `/snooze <N> <days>` | Snooze reminder for renewal #N by N days | member, admin, or owner |
+| `/start <token>` | Connect SYNCRO account | — |
+| `/disconnect` | Unlink Telegram account | — |
+| `/help` | Show help | — |
+
+### Querying Upcoming Renewals
+
+Send `/renewals` to get a numbered list of subscriptions renewing in the next 30 days:

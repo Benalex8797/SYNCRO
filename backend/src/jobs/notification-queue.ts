@@ -2,6 +2,8 @@ import { Queue, Worker, Job } from 'bullmq';
 import { createClient } from 'redis';
 import logger from '../config/logger';
 import { pushService } from './push-service';
+import { notificationDeadLetterService } from '../services/notification-dead-letter-service';
+import { jobAlertService } from '../services/job-alert-service';
 
 const REDIS_URL = process.env.REDIS_URL || 'redis://localhost:6379';
 const connection = { url: REDIS_URL };
@@ -65,10 +67,29 @@ notificationWorker.on('failed', (job, err) => {
     attempt: job?.attemptsMade,
     error: err.message,
   });
+
+  jobAlertService.recordJobOutcome('notification-queue', false, err);
+
+  // Move to dead-letter if exhausted all retries
+  if (job && job.attemptsMade >= (RETRY_DELAYS.length + 1)) {
+    const jobData = job.data as NotificationJobData;
+    notificationDeadLetterService
+      .moveToDeadLetter(
+        jobData,
+        job.id,
+        job.attemptsMade,
+        err.message,
+        err.name
+      )
+      .catch((dlqErr) => {
+        logger.error('Failed to move job to dead-letter queue:', dlqErr);
+      });
+  }
 });
 
 notificationWorker.on('completed', (job) => {
   logger.info('Notification job completed', { jobId: job.id });
+  jobAlertService.recordJobOutcome('notification-queue', true);
 });
 
 export async function enqueueNotification(data: NotificationJobData): Promise<void> {

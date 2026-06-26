@@ -4,27 +4,28 @@ module.exports = {
     testMatch: ['**/tests/**/*.test.ts'],
     verbose: true,
     forceExit: true,
-    clearMocks: true,
-    resetMocks: true,
-    restoreMocks: true,
+    clearMocks: false,
+    resetMocks: false,
+    restoreMocks: false,
     setupFiles: ['<rootDir>/tests/setup.ts'],
-    transform: {
-        '^.+\\.tsx?$': 'ts-jest',
+    moduleNameMapper: {
+        '^@syncro/shared$': '<rootDir>/../shared/src',
+        '^@syncro/shared/(.*)$': '<rootDir>/../shared/src/$1',
     },
-    globals: {
-        'ts-jest': {
+    transform: {
+        '^.+\\.tsx?$': ['ts-jest', {
             diagnostics: false,
-            isolatedModules: true,
             tsconfig: {
                 target: 'ES2022',
                 module: 'commonjs',
                 esModuleInterop: true,
                 skipLibCheck: true,
             },
-        },
+        }],
+        '^.+\\.js$': ['ts-jest', { diagnostics: false }],
     },
     transformIgnorePatterns: [
-        '/node_modules/(?!@stellar/stellar-sdk)',
+        '/node_modules/(?!(@stellar/stellar-sdk|uuid))',
     ],
     coverageThreshold: {
         global: {

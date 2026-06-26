@@ -78,7 +78,7 @@ When Redis is unavailable:
 The system provides health status for Redis connections:
 ```typescript
 const status = RateLimiterFactory.getStoreStatus();
-// Returns: { type: 'redis' | 'memory', available: boolean }
+// Returns: { type: 'redis' | 'memory', available: boolean, degraded: boolean }
 ```
 
 ## HTTP Headers

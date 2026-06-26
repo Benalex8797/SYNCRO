@@ -2,7 +2,10 @@ import logger from '../config/logger';
 import { supabase } from '../config/database';
 import { blockchainService } from './blockchain-service';
 import { webhookService } from './webhook-service';
+import { channelStateService } from './channel-state';
+import { settlementBatcher } from './settlement-batcher';
 import { addMonths, addQuarters, addYears } from 'date-fns';
+import { deriveEphemeralStealthAddress } from '@syncro/shared/crypto';
 
 interface RenewalRequest {
   subscriptionId: string;
@@ -36,22 +39,83 @@ export class RenewalExecutor {
         return await this.logFailure(subscriptionId, userId, 'billing_window_invalid', billingWindow.reason);
       }
 
-      // Step 3: Trigger contract renewal
+      // Step 3: Stealth address — derive ephemeral payment address when enabled
+      let stealthAddress: string | undefined;
+      let ephemeralPubkey: string | undefined;
+      const stealthEnabled = process.env.STEALTH_PAYMENTS_ENABLED === 'true';
+      if (stealthEnabled) {
+        const meta = await this.resolveStealthMetaAddress(userId);
+        if (meta) {
+          try {
+            const derived = deriveEphemeralStealthAddress(meta, `${subscriptionId}:${approvalId}`);
+            stealthAddress = derived.stealthAddress;
+            ephemeralPubkey = derived.ephemeralPubkey;
+            logger.info('Stealth renewal payment address derived', {
+              subscriptionId,
+              ephemeralPubkey,
+              stealthAddress,
+            });
+          } catch (stealthErr) {
+            logger.warn('Stealth derivation failed, falling back to standard renewal', {
+              subscriptionId,
+              error: stealthErr instanceof Error ? stealthErr.message : String(stealthErr),
+            });
+          }
+        }
+      }
+
+      // Step 4: Payment channel — off-chain renewal when active channel exists
+      const channelRenewal = await this.tryChannelRenewal(userId, subscriptionId, amount);
+      if (channelRenewal.used) {
+        await this.updateSubscription(
+          subscriptionId,
+          billingWindow.billingCycle ?? 'monthly',
+        );
+        await this.logSuccess(subscriptionId, userId, undefined, stealthAddress, ephemeralPubkey);
+        return { success: true, subscriptionId };
+      }
+
+      // Step 5: Queue settlement for batched on-chain submission
+      const settlementId = await settlementBatcher.enqueue({
+        userId,
+        subscriptionId,
+        amount,
+        settlementType: 'renewal',
+        payload: {
+          approvalId,
+          stealthAddress,
+          ephemeralPubkey,
+        },
+      });
+
       const contractResult = await this.triggerContractRenewal(
         subscriptionId,
         approvalId,
-        amount
+        amount,
+        stealthAddress,
       );
 
       if (!contractResult.success) {
         return await this.logFailure(subscriptionId, userId, 'contract_failure', contractResult.error);
       }
 
-      // Step 4: Update DB
-      await this.updateSubscription(subscriptionId, contractResult.transactionHash);
+      // Step 6: Update DB
+      await this.updateSubscription(
+        subscriptionId,
+        billingWindow.billingCycle ?? 'monthly',
+        contractResult.transactionHash,
+      );
 
-      // Step 5: Log result
-      await this.logSuccess(subscriptionId, userId, contractResult.transactionHash);
+      // Step 7: Log result
+      await this.logSuccess(
+        subscriptionId,
+        userId,
+        contractResult.transactionHash,
+        stealthAddress,
+        ephemeralPubkey,
+      );
+
+      logger.debug('Settlement queued for batch', { settlementId, subscriptionId });
 
       return {
         success: true,
@@ -118,7 +182,7 @@ export class RenewalExecutor {
 
   private async validateBillingWindow(
     subscriptionId: string
-  ): Promise<{ valid: boolean; reason?: string }> {
+  ): Promise<{ valid: boolean; reason?: string; billingCycle?: 'monthly' | 'quarterly' | 'yearly' }> {
     const { data: subscription, error } = await supabase
       .from('subscriptions')
       .select('next_billing_date, status, billing_cycle')
@@ -144,18 +208,78 @@ export class RenewalExecutor {
     return { valid: true, billingCycle: subscription.billing_cycle };
   }
 
+  private async resolveStealthMetaAddress(
+    userId: string,
+  ): Promise<{ viewPublicKey: string; spendPublicKey: string } | null> {
+    const envView = process.env.STEALTH_VIEW_PUBKEY;
+    const envSpend = process.env.STEALTH_SPEND_PUBKEY;
+    if (envView && envSpend) {
+      return { viewPublicKey: envView, spendPublicKey: envSpend };
+    }
+
+    const { data: profile } = await supabase
+      .from('profiles')
+      .select('stealth_meta_address')
+      .eq('id', userId)
+      .single();
+
+    const raw = profile?.stealth_meta_address as string | null;
+    if (!raw?.startsWith('syncro:stealth:v1:')) return null;
+
+    const [spend, view] = raw.replace('syncro:stealth:v1:', '').split(':');
+    if (!spend || !view) return null;
+    return { spendPublicKey: spend, viewPublicKey: view };
+  }
+
+  private async tryChannelRenewal(
+    userId: string,
+    subscriptionId: string,
+    amount: number,
+  ): Promise<{ used: boolean }> {
+    if (process.env.PAYMENT_CHANNELS_ENABLED !== 'true') {
+      return { used: false };
+    }
+
+    try {
+      const channel = await channelStateService.findPayableChannel(userId, amount);
+      if (!channel) return { used: false };
+
+      await channelStateService.applyRenewalPayment(
+        channel.id,
+        userId,
+        subscriptionId,
+        amount,
+      );
+      logger.info('Off-chain channel renewal applied', {
+        channelId: channel.id,
+        subscriptionId,
+      });
+      return { used: true };
+    } catch (err) {
+      logger.warn('Channel renewal failed, falling back to on-chain', {
+        subscriptionId,
+        error: err instanceof Error ? err.message : String(err),
+      });
+      return { used: false };
+    }
+  }
+
   private async triggerContractRenewal(
     subscriptionId: string,
     approvalId: string,
-    amount: number
+    amount: number,
+    stealthAddress?: string,
   ): Promise<{ success: boolean; transactionHash?: string; error?: string }> {
     try {
-      // Simulate contract interaction via blockchainService
       const result = await blockchainService.syncSubscription(
         subscriptionId,
         subscriptionId,
         'update',
-        { status: 'renewed', amount }
+        {
+          status: 'renewed',
+          amount,
+          ...(stealthAddress ? { paymentAddress: stealthAddress } : {}),
+        },
       );
 
       return {
@@ -208,13 +332,17 @@ export class RenewalExecutor {
   private async logSuccess(
     subscriptionId: string,
     userId: string,
-    transactionHash?: string
+    transactionHash?: string,
+    stealthAddress?: string,
+    ephemeralPubkey?: string,
   ): Promise<void> {
     await supabase.from('renewal_logs').insert({
       subscription_id: subscriptionId,
       user_id: userId,
       status: 'success',
       transaction_hash: transactionHash,
+      stealth_address: stealthAddress ?? null,
+      ephemeral_pubkey: ephemeralPubkey ?? null,
       created_at: new Date().toISOString(),
     });
 

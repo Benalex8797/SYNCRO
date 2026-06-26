@@ -9,10 +9,14 @@ vi.mock("@/lib/supabase/server", () => ({
   createClient: vi.fn(),
 }))
 
-vi.mock("@/lib/api/auth", () => ({
-  requireAuth: vi.fn(),
-  createRequestContext: vi.fn().mockReturnValue({ requestId: "test-id" }),
-}))
+vi.mock("@/lib/api/auth", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/lib/api/auth")>()
+  return {
+    ...actual,
+    requireAuth: vi.fn(),
+    createRequestContext: vi.fn().mockReturnValue({ requestId: "test-id" }),
+  }
+})
 
 describe("Subscriptions API Route", () => {
   let supabase: any
@@ -51,6 +55,18 @@ describe("Subscriptions API Route", () => {
       expect(body.data.items[0].name).toBe("Netflix")
       expect(supabase.from).toHaveBeenCalledWith("subscriptions")
       expect(supabase.eq).toHaveBeenCalledWith("user_id", "user_123")
+    })
+
+    it("should return 401 for unauthenticated requests", async () => {
+      vi.mocked(requireAuth).mockResolvedValue(null as any)
+
+      const request = new NextRequest("http://localhost/api/subscriptions")
+      const response = await GET(request)
+      const body = await response.json()
+
+      expect(response.status).toBe(401)
+      expect(body.success).toBe(false)
+      expect(body.error.code).toBe("UNAUTHORIZED")
     })
 
     it("should handle database errors", async () => {
@@ -106,6 +122,29 @@ describe("Subscriptions API Route", () => {
           name: "Disney+",
         })
       )
+    })
+
+    it("should return 401 for unauthenticated requests", async () => {
+      vi.mocked(requireAuth).mockResolvedValue(null as any)
+
+      const newSub = {
+        name: "Disney+",
+        category: "Entertainment",
+        price: 7.99,
+        status: "active",
+      }
+
+      const request = new NextRequest("http://localhost/api/subscriptions", {
+        method: "POST",
+        body: JSON.stringify(newSub),
+      })
+
+      const response = await POST(request)
+      const body = await response.json()
+
+      expect(response.status).toBe(401)
+      expect(body.success).toBe(false)
+      expect(body.error.code).toBe("UNAUTHORIZED")
     })
 
     it("should validate the request body", async () => {

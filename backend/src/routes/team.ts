@@ -7,6 +7,7 @@ import { emailService } from '../services/email-service';
 import { createTeamInviteLimiter } from '../middleware/rate-limit-factory';
 import logger from '../config/logger';
 import { inviteTeamSchema, updateRoleSchema } from '../schemas/team';
+import { NotFoundError } from '../errors';
 
 const router: Router = Router();
 

@@ -25,6 +25,8 @@ export function useNotifications({
   consolidationSuggestions,
   budgetAlert,
 }: UseNotificationsProps) {
+  const [readIds, setReadIds] = useState<Set<string | number>>(new Set());
+
   const [notifications, setNotifications] = useState<Notification[]>([
     {
       id: 1,
@@ -80,6 +82,18 @@ export function useNotifications({
       },
     },
   ]);
+
+  // Load persisted read state on mount
+  useEffect(() => {
+    try {
+      const saved = localStorage.getItem("syncro_read_notifications");
+      if (saved) {
+        setReadIds(new Set(JSON.parse(saved)));
+      }
+    } catch (e) {
+      console.error("Failed to parse read notifications from localStorage");
+    }
+  }, []);
 
   useEffect(() => {
     const newNotifications: Notification[] = [];
@@ -145,15 +159,23 @@ export function useNotifications({
   }, [priceChanges, renewalReminders, budgetAlert, consolidationSuggestions]);
 
   const handleMarkNotificationRead = useCallback((id: Notification["id"]) => {
-    setNotifications((prev) =>
-      prev.map((n) => (n.id === id ? { ...n, read: true } : n))
-    );
+    setReadIds((prev) => {
+      const newSet = new Set(prev);
+      newSet.add(id);
+      localStorage.setItem("syncro_read_notifications", JSON.stringify(Array.from(newSet)));
+      return newSet;
+    });
   }, []);
 
-  const unreadNotifications = notifications.filter((n) => !n.read).length;
+  const processedNotifications = notifications.map((n) => ({
+    ...n,
+    read: n.read || readIds.has(n.id),
+  }));
+
+  const unreadNotifications = processedNotifications.filter((n) => !n.read).length;
 
   return {
-    notifications,
+    notifications: processedNotifications,
     unreadNotifications,
     handleMarkNotificationRead,
   };

@@ -2,7 +2,7 @@ import { apiGet, apiPatch } from "@/lib/api"
 
 export interface UserPreferences {
   user_id: string
-  notification_channels: ('email' | 'push')[]
+  notification_channels: ('email' | 'push' | 'telegram' | 'slack')[]
   reminder_timing: number[]
   email_opt_ins: {
     marketing: boolean
@@ -19,11 +19,17 @@ export interface UserPreferences {
   quiet_hours_end: string
   quiet_hours_timezone: string
   critical_alerts_only: boolean
+  currency: string
+  timezone: string
+  locale: string
+  preferred_gift_card_provider: string
+  privacy_mode_enabled: boolean
+  encryption_key?: string
   updated_at: string
 }
 
 export interface UserPreferencesUpdateInput {
-  notification_channels?: ('email' | 'push')[]
+  notification_channels?: ('email' | 'push' | 'telegram' | 'slack')[]
   reminder_timing?: number[]
   email_opt_ins?: {
     marketing?: boolean
@@ -40,6 +46,12 @@ export interface UserPreferencesUpdateInput {
   quiet_hours_end?: string
   quiet_hours_timezone?: string
   critical_alerts_only?: boolean
+  currency?: string
+  timezone?: string
+  locale?: string
+  preferred_gift_card_provider?: string
+  privacy_mode_enabled?: boolean
+  encryption_key?: string
 }
 
 export interface QuietHoursUpdateInput {

@@ -1,3 +1,5 @@
+import { formatCurrency } from "./currency-utils"
+
 export interface BudgetAlert {
     level: "critical" | "warning";
     message: string;
@@ -6,16 +8,15 @@ export interface BudgetAlert {
 
 export function checkBudgetAlerts(
     totalSpend: number,
-    budgetLimit: number
+    budgetLimit: number,
+    currency: string = "USD"
 ): BudgetAlert | null {
     const percentage = (totalSpend / budgetLimit) * 100;
 
     if (percentage >= 100) {
         return {
             level: "critical",
-            message: `You've exceeded your $${budgetLimit} budget by $${(
-                totalSpend - budgetLimit
-            ).toFixed(2)}`,
+            message: `You've exceeded your ${formatCurrency(budgetLimit, currency)} budget by ${formatCurrency(totalSpend - budgetLimit, currency)}`,
             percentage: percentage.toFixed(0),
         };
     } else if (percentage >= 80) {
@@ -23,7 +24,7 @@ export function checkBudgetAlerts(
             level: "warning",
             message: `You've used ${percentage.toFixed(
                 0
-            )}% of your $${budgetLimit} budget`,
+            )}% of your ${formatCurrency(budgetLimit, currency)} budget`,
             percentage: percentage.toFixed(0),
         };
     }
@@ -48,9 +49,10 @@ export function wouldExceedBudget(
 /** Annual projection message. */
 export function annualProjection(
     monthlyTotal: number,
-    annualBudget: number
+    annualBudget: number,
+    currency: string = "USD"
 ): string | null {
     const projected = monthlyTotal * 12;
     if (projected <= annualBudget) return null;
-    return `At your current rate, you'll spend $${projected.toFixed(0)} on subscriptions this year — $${(projected - annualBudget).toFixed(0)} over your $${annualBudget} annual budget.`;
+    return `At your current rate, you'll spend ${formatCurrency(projected, currency)} on subscriptions this year — ${formatCurrency(projected - annualBudget, currency)} over your ${formatCurrency(annualBudget, currency)} annual budget.`;
 }

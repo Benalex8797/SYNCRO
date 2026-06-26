@@ -27,23 +27,23 @@ let unvalidatedRoutes = [];
 files.forEach((file) => {
   const content = fs.readFileSync(file, 'utf8');
   const relativePath = path.relative(path.join(__dirname, '../..'), file);
-  
+
   // Split into lines for analysis
   const lines = content.split('\n');
-  
+
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i];
-    
+
     // Pattern to match standard Express route registrations
     // e.g. router.get('/', ...), v1Router.post('/...', ...)
     const routeMatch = line.match(/(?:router|v1Router|integrationRouter)\.(get|post|put|patch|delete)\s*\(\s*['"`]([^'"`]+)['"`]/i);
-    
+
     if (routeMatch) {
       totalRoutes++;
       const method = routeMatch[1].toUpperCase();
       const routePath = routeMatch[2];
       const routeLabel = `${method} ${routePath} in ${relativePath}:${i + 1}`;
-      
+
       // Check 1: Preceding lines for VALIDATION_BYPASS
       let hasBypass = false;
       let bypassReason = '';
@@ -55,12 +55,12 @@ files.forEach((file) => {
           break;
         }
       }
-      
+
       if (hasBypass) {
         bypassedRoutes++;
         continue;
       }
-      
+
       // Check 2: Inline middleware validation or ownership validation
       // We check from current line down to the next 6 lines or until we find standard signature elements
       let routeArgsBlock = '';
@@ -70,17 +70,17 @@ files.forEach((file) => {
           break;
         }
       }
-      
-      const hasMiddleware = routeArgsBlock.includes('validate(') || 
+
+      const hasMiddleware = routeArgsBlock.includes('validate(') ||
                             routeArgsBlock.includes('validateSubscriptionOwnership') ||
                             routeArgsBlock.includes('validateBulkSubscriptionOwnership') ||
                             routeArgsBlock.includes('upload.single'); // Multer middleware
-      
+
       if (hasMiddleware) {
         validatedRoutes++;
         continue;
       }
-      
+
       // Check 3: Check if body uses validateRequest
       // We look at the body lines following the route definition until the next route or end of file
       let hasBodyValidation = false;
@@ -95,12 +95,12 @@ files.forEach((file) => {
           break;
         }
       }
-      
+
       if (hasBodyValidation) {
         validatedRoutes++;
         continue;
       }
-      
+
       unvalidatedRoutes.push(routeLabel);
     }
   }

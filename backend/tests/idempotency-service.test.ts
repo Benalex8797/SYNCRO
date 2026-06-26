@@ -1,32 +1,24 @@
-import { IdempotencyService, createIdempotencyService, TypedIdempotentResponse, SerializableInput } from '../src/services/idempotency';
-import { supabase } from '../src/config/database';
-
 // Mock supabase
-const mockSupabase = {
-  from: jest.fn(() => ({
-    select: jest.fn(() => ({
-      eq: jest.fn(() => ({
-        eq: jest.fn(() => ({
-          eq: jest.fn(() => ({
-            gt: jest.fn(() => ({
-              single: jest.fn()
-            }))
-          }))
-        }))
+jest.mock('../src/config/database', () => ({
+  supabase: {
+    from: jest.fn(() => ({
+      select: jest.fn(() => ({
+        eq: jest.fn().mockReturnThis(),
+        gt: jest.fn().mockReturnThis(),
+        single: jest.fn()
       })),
       delete: jest.fn(() => ({
         lt: jest.fn(() => ({
           select: jest.fn()
         }))
-      }))
-    })),
-    insert: jest.fn(() => ({}))
-  }))
-};
-
-jest.mock('../src/config/database', () => ({
-  supabase: mockSupabase
+      })),
+      insert: jest.fn(() => ({}))
+    }))
+  }
 }));
+
+import { IdempotencyService, createIdempotencyService, TypedIdempotentResponse, SerializableInput } from '../src/services/idempotency';
+import { supabase } from '../src/config/database';
 
 // Mock logger
 jest.mock('../src/config/logger', () => ({

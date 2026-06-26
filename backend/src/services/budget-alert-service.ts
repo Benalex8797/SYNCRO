@@ -1,6 +1,7 @@
 import { supabase } from '../config/database';
 import logger from '../config/logger';
 import { sendSlackAlert } from './slack-service';
+import { calculateMonthlySpend } from '@syncro/shared/subscription-math';
 
 function currentMonth(): string {
   return new Date().toISOString().substring(0, 7); // YYYY-MM
@@ -70,20 +71,7 @@ export async function checkBudgetAlerts(userId: string): Promise<void> {
       .eq('user_id', userId)
       .eq('status', 'active');
 
-    const monthlyTotal = (subs ?? []).reduce((sum, sub) => {
-      const price = Number(sub.price);
-      switch ((sub.billing_cycle ?? '').toLowerCase()) {
-        case 'yearly':
-        case 'annual':
-          return sum + price / 12;
-        case 'quarterly':
-          return sum + price / 3;
-        case 'weekly':
-          return sum + price * (365 / 7 / 12);
-        default:
-          return sum + price;
-      }
-    }, 0);
+    const monthlyTotal = calculateMonthlySpend(subs ?? []);
 
     const budget = Number(profile.monthly_budget);
     const percentage = (monthlyTotal / budget) * 100;
@@ -145,18 +133,7 @@ export async function wouldExceedBudget(
     .eq('user_id', userId)
     .eq('status', 'active');
 
-  const currentTotal = (subs ?? []).reduce((sum, sub) => {
-    const price = Number(sub.price);
-    switch ((sub.billing_cycle ?? '').toLowerCase()) {
-      case 'yearly':
-      case 'annual':
-        return sum + price / 12;
-      case 'quarterly':
-        return sum + price / 3;
-      default:
-        return sum + price;
-    }
-  }, 0);
+  const currentTotal = calculateMonthlySpend(subs ?? []);
 
   const budget = Number(profile.monthly_budget);
   const newTotal = currentTotal + newMonthlyAmount;

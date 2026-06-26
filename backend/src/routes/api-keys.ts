@@ -2,9 +2,12 @@ import { Router, Response } from 'express';
 import crypto from 'crypto';
 import { supabase } from '../config/database';
 import { authenticate, AuthenticatedRequest, requireScope } from '../middleware/auth';
+import { requireRole } from '../middleware/rbac';
 import { validate } from '../middleware/validate';
 import logger from '../config/logger';
 import { createApiKeySchema } from '../schemas/api-key';
+import { NotFoundError } from '../errors';
+import { auditApiKeyEvent } from '../services/audit-service';
 
 const router: Router = Router();
 
@@ -22,6 +25,7 @@ function generateApiKey(): { key: string; hash: string } {
  */
 router.post(
   '/',
+  requireRole('owner', 'admin'),
   requireScope('subscriptions:write'),
   validate(createApiKeySchema),
   async (req: AuthenticatedRequest, res: Response) => {
@@ -50,6 +54,13 @@ router.post(
         return res.status(500).json({ error: 'Failed to create API key' });
       }
 
+      await auditApiKeyEvent('api_key.created', req.user.id, {
+        keyName: name,
+        scopes,
+        ipAddress: req.ip,
+        userAgent: req.headers['user-agent'],
+      });
+
       return res.status(201).json({ success: true, key, scopes });
     } catch (error) {
       logger.error('Create API key error:', error);
@@ -62,7 +73,7 @@ router.post(
  * GET /api/keys
  * List API keys for the authenticated user
  */
-router.get('/', requireScope('subscriptions:read'), async (req: AuthenticatedRequest, res: Response) => {
+router.get('/', requireRole('owner', 'admin'), requireScope('subscriptions:read'), async (req: AuthenticatedRequest, res: Response) => {
   const { data, error } = await supabase
     .from('api_keys')
     .select('id, service_name, scopes, revoked, created_at, updated_at, last_used_at, request_count')
@@ -78,7 +89,7 @@ router.get('/', requireScope('subscriptions:read'), async (req: AuthenticatedReq
  * DELETE /api/keys/:id
  * Revoke an API key
  */
-router.delete('/:id', requireScope('subscriptions:write'), async (req: AuthenticatedRequest, res: Response) => {
+router.delete('/:id', requireRole('owner', 'admin'), requireScope('subscriptions:write'), async (req: AuthenticatedRequest, res: Response) => {
   const { data: existingKey, error: fetchError } = await supabase
     .from('api_keys')
     .select('id')
@@ -98,6 +109,12 @@ router.delete('/:id', requireScope('subscriptions:write'), async (req: Authentic
 
   if (error) throw error;
 
+  await auditApiKeyEvent('api_key.revoked', req.user!.id, {
+    keyId: req.params.id,
+    ipAddress: req.ip,
+    userAgent: req.headers['user-agent'],
+  });
+
   res.json({ success: true, message: 'API key revoked' });
 });
 
@@ -105,7 +122,7 @@ router.delete('/:id', requireScope('subscriptions:write'), async (req: Authentic
  * GET /api/keys/:id/usage
  * Get usage stats for an API key
  */
-router.get('/:id/usage', requireScope('subscriptions:read'), async (req: AuthenticatedRequest, res: Response) => {
+router.get('/:id/usage', requireRole('owner', 'admin'), requireScope('subscriptions:read'), async (req: AuthenticatedRequest, res: Response) => {
   const { data, error } = await supabase
     .from('api_keys')
     .select('id, service_name, scopes, revoked, created_at, updated_at, last_used_at, request_count')

@@ -202,12 +202,116 @@ export class RateLimiterFactory {
   }
 
   /**
-   * Get Redis store status for health monitoring
+   * Create rate limiter for stealth address operations
+   * 100 derivations per hour per user
    */
-  static getStoreStatus(): { type: 'redis' | 'memory'; available: boolean } {
+  static createStealthAddressLimiter(): RateLimitRequestHandler {
+    return rateLimit({
+      windowMs: rateLimitConfig.privacy.stealthAddress.windowMs,
+      max: rateLimitConfig.privacy.stealthAddress.max,
+      message: rateLimitConfig.privacy.stealthAddress.message,
+      standardHeaders: true,
+      legacyHeaders: true,
+      validate: false,
+      keyGenerator: userKeyGenerator,
+      store: this.redisStore || undefined,
+      handler: (req, res, _next) => {
+        createRateLimitHandler('stealth-address')(req, res);
+        res.status(429).json(rateLimitConfig.privacy.stealthAddress.message);
+      },
+      skip: (req) => {
+        const authReq = req as AuthenticatedRequest;
+        return !authReq.user?.id;
+      },
+    });
+  }
+
+  /**
+   * Create rate limiter for ZK proof verification endpoints
+   * 10 proof verifications per minute per user
+   */
+  static createZkProofLimiter(): RateLimitRequestHandler {
+    return rateLimit({
+      windowMs: rateLimitConfig.privacy.zkProof.windowMs,
+      max: rateLimitConfig.privacy.zkProof.max,
+      message: rateLimitConfig.privacy.zkProof.message,
+      standardHeaders: true,
+      legacyHeaders: true,
+      validate: false,
+      keyGenerator: userKeyGenerator,
+      store: this.redisStore || undefined,
+      handler: (req, res, _next) => {
+        createRateLimitHandler('zk-proof')(req, res);
+        res.status(429).json(rateLimitConfig.privacy.zkProof.message);
+      },
+      skip: (req) => {
+        const authReq = req as AuthenticatedRequest;
+        return !authReq.user?.id;
+      },
+    });
+  }
+
+  /**
+   * Create rate limiter for payment channel state updates
+   * 1000 state updates per hour per channel
+   */
+  static createPaymentChannelStateUpdateLimiter(): RateLimitRequestHandler {
+    return rateLimit({
+      windowMs: rateLimitConfig.privacy.paymentChannel.stateUpdate.windowMs,
+      max: rateLimitConfig.privacy.paymentChannel.stateUpdate.max,
+      message: rateLimitConfig.privacy.paymentChannel.stateUpdate.message,
+      standardHeaders: true,
+      legacyHeaders: true,
+      validate: false,
+      keyGenerator: userKeyGenerator,
+      store: this.redisStore || undefined,
+      handler: (req, res, _next) => {
+        createRateLimitHandler('payment-channel-state-update')(req, res);
+        res.status(429).json(rateLimitConfig.privacy.paymentChannel.stateUpdate.message);
+      },
+      skip: (req) => {
+        const authReq = req as AuthenticatedRequest;
+        return !authReq.user?.id;
+      },
+    });
+  }
+
+  /**
+   * Create rate limiter for selective disclosure proof generation
+   * 20 disclosure proofs per day per user
+   */
+  static createSelectiveDisclosureLimiter(): RateLimitRequestHandler {
+    return rateLimit({
+      windowMs: rateLimitConfig.privacy.selectiveDisclosure.windowMs,
+      max: rateLimitConfig.privacy.selectiveDisclosure.max,
+      message: rateLimitConfig.privacy.selectiveDisclosure.message,
+      standardHeaders: true,
+      legacyHeaders: true,
+      validate: false,
+      keyGenerator: userKeyGenerator,
+      store: this.redisStore || undefined,
+      handler: (req, res, _next) => {
+        createRateLimitHandler('selective-disclosure')(req, res);
+        res.status(429).json(rateLimitConfig.privacy.selectiveDisclosure.message);
+      },
+      skip: (req) => {
+        const authReq = req as AuthenticatedRequest;
+        return !authReq.user?.id;
+      },
+    });
+  }
+
+  /**
+   * Get Redis store status for health monitoring.
+   * When `degraded` is true the app is running with the in-memory fallback
+   * because Redis was configured but is currently unreachable.
+   */
+  static getStoreStatus(): { type: 'redis' | 'memory'; available: boolean; degraded: boolean } {
+    const degraded = this.redisStoreInitialized && !this.redisStore;
     return {
       type: this.redisStore ? 'redis' : 'memory',
       available: this.redisStoreInitialized,
+      degraded,
     };
   }
 }
@@ -217,3 +321,7 @@ export const createTeamInviteLimiter = () => RateLimiterFactory.createTeamInvite
 export const createMfaLimiter = () => RateLimiterFactory.createMfaLimiter();
 export const createAdminLimiter = () => RateLimiterFactory.createAdminLimiter();
 export const createSimulationLimiter = () => RateLimiterFactory.createSimulationLimiter();
+export const createStealthAddressLimiter = () => RateLimiterFactory.createStealthAddressLimiter();
+export const createZkProofLimiter = () => RateLimiterFactory.createZkProofLimiter();
+export const createPaymentChannelStateUpdateLimiter = () => RateLimiterFactory.createPaymentChannelStateUpdateLimiter();
+export const createSelectiveDisclosureLimiter = () => RateLimiterFactory.createSelectiveDisclosureLimiter();

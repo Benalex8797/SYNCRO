@@ -115,9 +115,10 @@ export default function ReminderSettings() {
                 {day} day{day !== 1 ? 's' : ''} before
                 <button
                   onClick={() => handleRemoveDay(day)}
+                  aria-label={`Remove ${day} day${day !== 1 ? 's' : ''} before reminder`}
                   className="ml-1 hover:bg-gray-200 rounded-full p-0.5"
                 >
-                  <X className="w-3 h-3" />
+                  <X className="w-3 h-3" aria-hidden="true" />
                 </button>
               </Badge>
             ))}

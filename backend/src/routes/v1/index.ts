@@ -109,6 +109,16 @@ v1Router.get('/admin/metrics/renewals', adminAuth, async (req: express.Request, 
 });
 
 // VALIDATION_BYPASS: No request body or params needed
+v1Router.get('/admin/metrics/external-services', adminAuth, async (req: express.Request, res: express.Response) => {
+  try {
+    const metrics = monitoringService.getExternalServiceMetrics();
+    res.json(metrics);
+  } catch (error) {
+    res.status(500).json({ error: 'Failed to fetch external service metrics' });
+  }
+});
+
+// VALIDATION_BYPASS: No request body or params needed
 v1Router.get('/admin/metrics/activity', adminAuth, async (req: express.Request, res: express.Response) => {
   try {
     const metrics = await monitoringService.getAgentActivity();

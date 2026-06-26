@@ -4,6 +4,8 @@ import { ArrowRight, Mail, Sparkles, Package } from "lucide-react"
 import { useState } from "react"
 import { TrialSection } from "./trial-section"
 import { formatCurrency, convertCurrency, type Currency } from "@/lib/currency-utils"
+import { formatDate, formatDateTime, getDaysDifference } from "@/lib/timezone-utils"
+import { useUserSettings } from "@/components/providers/user-settings-provider"
 import { Skeleton } from "@/components/ui/skeleton"
 import type { AnalyticsSummary } from "@/lib/api/analytics"
 import type {
@@ -42,6 +44,7 @@ interface DashboardPageProps {
   exchangeRates?: Record<string, number>
   ratesStale?: boolean
   isLoading?: boolean
+  onRestartTour?: () => void
 }
 
 // ── Component ─────────────────────────────────────────────────────────────────
@@ -63,8 +66,10 @@ export default function DashboardPage({
   exchangeRates,
   ratesStale,
   isLoading = false,
+  onRestartTour,
 }: DashboardPageProps) {
-  const dc = displayCurrency ?? "USD"
+  const { settings } = useUserSettings()
+  const dc = displayCurrency ?? settings.currency ?? "USD"
   const rates = exchangeRates ?? {}
 
   const convertPrice = (price: number, currency?: string): number => {
@@ -211,6 +216,21 @@ export default function DashboardPage({
               ))}
             </select>
           )}
+
+          {onRestartTour && (
+            <button
+              onClick={onRestartTour}
+              aria-label="Restart Onboarding Tour"
+              className={`px-3 py-2 border rounded-lg text-sm font-medium transition-colors flex items-center gap-2 ${
+                darkMode
+                  ? "bg-[#2D3748] border-gray-700 text-gray-300 hover:text-white"
+                  : "bg-white border-gray-300 text-gray-700 hover:text-gray-900"
+              }`}
+              title="Restart Onboarding Tour"
+            >
+              <span>Tour</span>
+            </button>
+          )}
         </div>
       </div>
 
@@ -285,8 +305,8 @@ export default function DashboardPage({
                 summary.budget_status.percentage > 90 ? "text-red-500" : "text-green-500"
               }`}
             >
-              ${summary.budget_status.current_spend.toFixed(0)} /{" "}
-              ${summary.budget_status.overall_limit.toFixed(0)}
+              {formatCurrency(summary.budget_status.current_spend, dc)} /{" "}
+              {formatCurrency(summary.budget_status.overall_limit, dc)}
             </span>
           </div>
           <div
@@ -557,9 +577,7 @@ function SubscriptionCard({
             <div className="flex items-center justify-between">
               <span className={`text-xs ${darkMode ? "text-gray-300" : "text-gray-700"}`}>
                 Last used:{" "}
-                {Math.floor(
-                  (Date.now() - new Date(sub.last_used_at).getTime()) / 86_400_000
-                )}{" "}
+                {Math.abs(getDaysDifference(sub.last_used_at))}{" "}
                 days ago
               </span>
               <span
@@ -586,11 +604,8 @@ function SubscriptionCard({
         {sub.is_trial && sub.trial_ends_at && (
           <div className="p-2 bg-[#007A5C]/10 rounded-lg">
             <p className={`text-xs ${darkMode ? "text-[#007A5C]" : "text-green-700"}`}>
-              Trial ends in{" "}
-              {Math.ceil(
-                (new Date(sub.trial_ends_at).getTime() - Date.now()) / 86_400_000
-              )}{" "}
-              days — ${sub.price_after_trial}/month after
+              Trial ends in {getDaysDifference(sub.trial_ends_at)} days —{" "}
+              {formatCurrency(sub.price_after_trial || 0, dc)}/month after
             </p>
           </div>
         )}

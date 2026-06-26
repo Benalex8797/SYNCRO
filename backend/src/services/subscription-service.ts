@@ -6,10 +6,9 @@ import { webhookService } from "./webhook-service";
 import { referralService } from "./referral-service";
 import logger from "../config/logger";
 import { DatabaseTransaction } from "../utils/transaction";
-import SERVICE_CATEGORIES from "../../services/service-categories";
-import { privacyService } from "./privacy-service";
-import { encryptForUser, decryptForUser } from "../utils/encryption";
-import { PRIVACY_ENCRYPT_ON_CHAIN } from "../../../shared/src/blockchain-flags";
+import SERVICE_CATEGORIES from "./service-categories";
+import { validateCursor, encodeCursor } from "../utils/pagination";
+import { deriveStealthAddress } from "../../../shared/src/crypto/stealth-derive";
 import type {
   Subscription,
   SubscriptionCreateInput,
@@ -40,6 +39,31 @@ export class SubscriptionService {
   ): Promise<SubscriptionSyncResult> {
     return await DatabaseTransaction.execute(async (client) => {
       try {
+        // Determine the next stealth derivation index for this user
+        const { data: indexRow } = await client
+          .from("subscriptions")
+          .select("stealth_index")
+          .eq("user_id", userId)
+          .order("stealth_index", { ascending: false })
+          .limit(1)
+          .single();
+
+        const stealthIndex = indexRow ? (indexRow.stealth_index as number) + 1 : 0;
+
+        // Derive stealth address when the user has a stored stealth meta-address.
+        const { data: profile, error: profileError } = await client
+          .from('profiles')
+          .select('stealth_meta_address')
+          .eq('id', userId)
+          .single();
+
+        if (profileError) {
+          throw new Error(`Failed to load user profile: ${profileError.message}`);
+        }
+
+        const metaAddress = profile?.stealth_meta_address ?? null;
+        let stealthAddress: string | null = null;
+
         const { data: subscription, error: dbError } = await client
           .from("subscriptions")
           .insert({
@@ -59,6 +83,8 @@ export class SubscriptionService {
             visibility: input.visibility || "private",
             tags: input.tags || [],
             email_account_id: input.email_account_id || null,
+            stealth_index: stealthIndex,
+            stealth_address: null,
             updated_at: new Date().toISOString(),
           })
           .select()
@@ -68,37 +94,27 @@ export class SubscriptionService {
           throw new Error(`Database error: ${dbError.message}`);
         }
 
+        // Now that we have the subscription id, derive and persist the stealth address
+        if (metaAddress) {
+          stealthAddress = deriveStealthAddress(metaAddress, subscription.id, stealthIndex);
+          await client
+            .from("subscriptions")
+            .update({ stealth_address: stealthAddress })
+            .eq("id", subscription.id);
+          subscription.stealth_address = stealthAddress;
+        }
+
         // Attempt blockchain sync (non-blocking)
         let blockchainResult;
         let syncStatus: "synced" | "partial" | "failed" = "synced";
 
         try {
-          const encryptOnChain = await privacyService.isPrivacyFeatureEnabled(userId, PRIVACY_ENCRYPT_ON_CHAIN);
-
-          if (encryptOnChain) {
-            // Encrypt metadata and use the encrypted contract call
-            const metadata = JSON.stringify({
-              name: subscription.name,
-              price: subscription.price,
-              billing_cycle: subscription.billing_cycle,
-              status: subscription.status,
-              category: subscription.category,
-              notes: subscription.notes,
-            });
-            const encryptedBlob = encryptForUser(metadata, userId);
-            blockchainResult = await blockchainService.storeEncryptedSubscription(
-              userId,
-              subscription.id,
-              encryptedBlob,
-            );
-          } else {
-            blockchainResult = await blockchainService.syncSubscription(
-              userId,
-              subscription.id,
-              "create",
-              subscription,
-            );
-          }
+          blockchainResult = await blockchainService.syncSubscription(
+            userId,
+            subscription.id,
+            "create",
+            subscription,
+          );
 
           if (!blockchainResult.success) {
             syncStatus = "partial";
@@ -120,7 +136,7 @@ export class SubscriptionService {
         }
 
         // Trigger budget check (don't let it block response)
-        analyticsService.checkBudgetThreshold(userId).catch(e => 
+        analyticsService.checkBudgetThreshold(userId).catch(e =>
           logger.error('Background budget check failed:', e)
         );
 
@@ -285,7 +301,7 @@ export class SubscriptionService {
           .from("reminder_schedules")
           .delete()
           .eq("subscription_id", subscriptionId);
-        
+
         let blockchainResult;
         let syncStatus: "synced" | "partial" | "failed" = "synced";
 
@@ -414,7 +430,7 @@ export class SubscriptionService {
     try {
       const purgeDate = new Date();
       purgeDate.setDate(purgeDate.getDate() - daysToKeep);
-      
+
       // Perform the actual hard delete from the database
       // This cascades into reminders and tags via foreign keys if configured correctly,
       // otherwise, we are just relying on the direct delete.
@@ -427,12 +443,12 @@ export class SubscriptionService {
       if (error) {
         throw new Error(`Purge failed: ${error.message}`);
       }
-      
+
       const deletedCount = count || 0;
       if (deletedCount > 0) {
         logger.info(`Purged ${deletedCount} soft-deleted subscriptions (older than ${daysToKeep} days).`);
       }
-      
+
       return { deletedCount };
     } catch (error) {
       logger.error("Failed to purge deleted subscriptions:", error);
@@ -654,32 +670,12 @@ export class SubscriptionService {
         let syncStatus: "synced" | "partial" | "failed" = "synced";
 
         try {
-          const encryptOnChain = await privacyService.isPrivacyFeatureEnabled(userId, PRIVACY_ENCRYPT_ON_CHAIN);
-
-          if (encryptOnChain) {
-            // Encrypt metadata and use the encrypted contract call
-            const metadata = JSON.stringify({
-              name: subscription.name,
-              price: subscription.price,
-              billing_cycle: subscription.billing_cycle,
-              status: subscription.status,
-              category: subscription.category,
-              notes: subscription.notes,
-            });
-            const encryptedBlob = encryptForUser(metadata, userId);
-            blockchainResult = await blockchainService.storeEncryptedSubscription(
-              userId,
-              subscriptionId,
-              encryptedBlob,
-            );
-          } else {
-            blockchainResult = await blockchainService.syncSubscription(
-              userId,
-              subscriptionId,
-              "update",
-              subscription,
-            );
-          }
+          blockchainResult = await blockchainService.syncSubscription(
+            userId,
+            subscriptionId,
+            "update",
+            subscription,
+          );
 
           if (!blockchainResult.success) {
             syncStatus = "partial";
@@ -732,33 +728,6 @@ export class SubscriptionService {
       throw new Error("Subscription not found or access denied");
     }
 
-    // If encryption is enabled, attempt to read the encrypted copy from chain and merge
-    try {
-      const encryptOnChain = await privacyService.isPrivacyFeatureEnabled(userId, PRIVACY_ENCRYPT_ON_CHAIN);
-      if (encryptOnChain && blockchainService) {
-        const encryptedBlob = await blockchainService.getEncryptedSubscription(userId, subscriptionId);
-        if (encryptedBlob) {
-          try {
-            const decrypted = decryptForUser(encryptedBlob, userId);
-            const chainMeta = JSON.parse(decrypted);
-            // Merge on-chain metadata (audit copy) over the DB record — DB remains source of truth
-            return { ...subscription, ...chainMeta };
-          } catch (decryptErr) {
-            logger.warn("On-chain decryption failed, falling back to DB record", {
-              subscriptionId,
-              error: decryptErr instanceof Error ? decryptErr.message : String(decryptErr),
-            });
-          }
-        }
-      }
-    } catch (chainErr) {
-      // Non-fatal: DB is source of truth, chain is audit copy
-      logger.warn("Failed to fetch encrypted on-chain copy, using DB record", {
-        subscriptionId,
-        error: chainErr instanceof Error ? chainErr.message : String(chainErr),
-      });
-    }
-
     return subscription;
   }
 
@@ -770,6 +739,8 @@ export class SubscriptionService {
     options: ListSubscriptionsOptions = {},
   ): Promise<ListSubscriptionsResult> {
     const limit = Math.min(options.limit ?? 20, 100);
+
+    const validatedCursor = validateCursor(options.cursor);
 
     let query = supabase
       .from("subscriptions")
@@ -789,23 +760,13 @@ export class SubscriptionService {
       query = query.eq("category", options.category);
     }
 
-    if (options.cursor) {
-      try {
-        const decoded = JSON.parse(
-          Buffer.from(options.cursor, "base64").toString("utf-8"),
-        );
-        if (!decoded.created_at) {
-          throw new Error("Invalid cursor: missing created_at");
-        }
-        query = query.lt("created_at", decoded.created_at);
-      } catch {
-        throw new Error("Invalid pagination cursor");
-      }
+    if (validatedCursor) {
+      query = query.lt("created_at", validatedCursor.createdAt);
     }
 
     const { data: rows, error, count } = await query;
 
-    if (error) {
+if (error) {
       throw new Error(`Failed to fetch subscriptions: ${error.message}`);
     }
 
@@ -815,11 +776,7 @@ export class SubscriptionService {
     // Build next cursor from the last item in the page
     const nextCursor =
       hasMore && subscriptions.length > 0
-        ? Buffer.from(
-          JSON.stringify({
-            created_at: subscriptions[subscriptions.length - 1].created_at,
-          }),
-        ).toString("base64")
+        ? encodeCursor({ createdAt: subscriptions[subscriptions.length - 1].created_at })
         : null;
 
     return {
@@ -957,6 +914,38 @@ export class SubscriptionService {
     }
 
     return data || [];
+  }
+
+  /**
+   * Recover all stealth addresses for a user by re-deriving them from their
+   * stored indices. Useful for wallet recovery without on-chain scanning.
+   *
+   * For each subscription with a stealth_index, computes:
+   *   Address = HMAC-SHA256(metaAddress, `${subscription.id}:${stealth_index}`)
+   *
+   * @param userId - Owner whose subscriptions to re-derive.
+   * @param metaAddress - The user's stealth meta-address (wallet-level secret).
+   * @returns Array of { subscriptionId, stealthIndex, stealthAddress }.
+   */
+  async recoverStealthAddresses(
+    userId: string,
+    metaAddress: string,
+  ): Promise<{ subscriptionId: string; stealthIndex: number; stealthAddress: string }[]> {
+    const { data: rows, error } = await supabase
+      .from("subscriptions")
+      .select("id, stealth_index")
+      .eq("user_id", userId)
+      .order("stealth_index", { ascending: true });
+
+    if (error) {
+      throw new Error(`Failed to fetch subscriptions for recovery: ${error.message}`);
+    }
+
+    return (rows ?? []).map((row) => ({
+      subscriptionId: row.id as string,
+      stealthIndex: row.stealth_index as number,
+      stealthAddress: deriveStealthAddress(metaAddress, row.id as string, row.stealth_index as number),
+    }));
   }
 
   /**

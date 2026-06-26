@@ -2,6 +2,7 @@
 export default {
   preset: "ts-jest/presets/default-esm",
   testEnvironment: "node",
+  extensionsToTreatAsEsm: ['.ts'],
   moduleNameMapper: {
     "^(\\.\\.?\\/.+)\\.js$": "$1",
   },
@@ -12,5 +13,13 @@ export default {
         useESM: true,
       },
     ],
+  },
+  coverageThreshold: {
+    global: {
+      branches: 70,
+      functions: 75,
+      lines: 75,
+      statements: 75,
+    },
   },
 };

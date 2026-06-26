@@ -103,3 +103,9 @@ coverage/
 CLAUDE.md
 
 !backend/package-lock.json
+
+# Transpiled test artifacts — ts-jest compiles TypeScript at runtime; never commit JS output from backend/tests
+backend/tests/**/*.js
+backend/tests/**/*.js.map
+backend/tests/**/*.d.ts
+backend/tests/**/*.d.ts.map

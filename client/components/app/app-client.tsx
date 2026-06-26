@@ -65,7 +65,7 @@ import type {
     SubscriptionUpdates,
 } from "./app-client.types";
 
-interface AppContentProps extends AppClientProps {}
+import { UserSettingsProvider } from "@/components/providers/user-settings-provider";
 
 export function AppClient({
     initialSubscriptions,
@@ -75,17 +75,21 @@ export function AppClient({
     initialConsolidationSuggestions = [],
 }: AppClientProps) {
     return (
-        <UndoProvider>
-            <AppContent
-                initialSubscriptions={initialSubscriptions}
-                initialEmailAccounts={initialEmailAccounts}
-                initialPayments={initialPayments}
-                initialPriceChanges={initialPriceChanges}
-                initialConsolidationSuggestions={initialConsolidationSuggestions}
-            />
-        </UndoProvider>
+        <UserSettingsProvider>
+            <UndoProvider>
+                <AppContent
+                    initialSubscriptions={initialSubscriptions}
+                    initialEmailAccounts={initialEmailAccounts}
+                    initialPayments={initialPayments}
+                    initialPriceChanges={initialPriceChanges}
+                    initialConsolidationSuggestions={initialConsolidationSuggestions}
+                />
+            </UndoProvider>
+        </UserSettingsProvider>
     );
 }
+
+import { useUserSettings } from "@/components/providers/user-settings-provider";
 
 function AppContent({
     initialSubscriptions,
@@ -100,7 +104,12 @@ function AppContent({
     initialPriceChanges?: PriceChange[];
     initialConsolidationSuggestions?: ConsolidationSuggestion[];
 }) {
+    // User Settings
+    const { settings, updateSettings: updateUserSettings } = useUserSettings();
+    const currency = settings.currency;
+
     // Analytics state
+
     const [analyticsSummary, setAnalyticsSummary] = useState<AnalyticsSummary | undefined>(undefined);
 
     // App state
@@ -126,7 +135,6 @@ function AppContent({
     const [showEditSubscription, setShowEditSubscription] = useState(false);
     const [showDeletedPanel, setShowDeletedPanel] = useState(false);
     const [isLoadingSubscriptions, setIsLoadingSubscriptions] = useState(true);
-    const [currency, setCurrency] = useState<Currency>("USD");
     const [exchangeRates, setExchangeRates] = useState<Record<string, number>>({});
     const [ratesStale, setRatesStale] = useState(false);
     const [isOffline, setIsOffline] = useState(false);
@@ -141,7 +149,7 @@ function AppContent({
     const auth = useAuth();
     const { toasts, showToast, removeToast } = useToast();
     const { confirmDialog, showDialog, hideDialog } = useConfirmationDialog();
-    const { shouldShowTour, completeTour, skipTour } = useOnboardingTourEnhanced();
+    const { shouldShowTour, completeTour, skipTour, resetTour } = useOnboardingTourEnhanced();
     const {
         addDeletedSubscription,
         restoreSubscription,
@@ -247,7 +255,7 @@ function AppContent({
     const recurringSpend = calculateRecurringSpend(subscriptionsArray);
     const totalSpend = calculateTotalSpend(subscriptionsArray);
     const renewalReminders = checkRenewalReminders(subscriptionsArray);
-    const budgetAlert = checkBudgetAlerts(totalSpend, budgetLimit);
+    const budgetAlert = checkBudgetAlerts(totalSpend, budgetLimit, currency);
 
     const { notifications, unreadNotifications, handleMarkNotificationRead } =
         useNotifications({
@@ -652,6 +660,7 @@ function AppContent({
                                     displayCurrency={currency}
                                     exchangeRates={exchangeRates}
                                     ratesStale={ratesStale}
+                                    onRestartTour={resetTour}
                                 />
                             )
                         )}
@@ -723,7 +732,9 @@ function AppContent({
                                 onBudgetChange={handleBudgetChange}
                                 darkMode={darkMode}
                                 currency={currency}
-                                onCurrencyChange={(c: Currency) => setCurrency(c)}
+                                onCurrencyChange={(c: Currency) => updateUserSettings({ currency: c })}
+                                timezone={settings.timezone}
+                                onTimezoneChange={(tz: string) => updateUserSettings({ timezone: tz })}
                                 payments={payments}
                                 onRefund={async (transactionId: string) => {
                                     try {
@@ -749,6 +760,7 @@ function AppContent({
                                         });
                                     }
                                 }}
+                                onRestartTour={resetTour}
                             />
                         )}
                     </>

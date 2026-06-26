@@ -10,6 +10,8 @@ import {
   type PriceTier,
 } from "@/lib/subscription-templates"
 import { wouldExceedBudget } from "@/lib/budget-utils"
+import { useUserSettings } from "@/components/providers/user-settings-provider"
+import { formatCurrency } from "@/lib/currency-utils"
 
 const DIFFICULTY_LABEL: Record<string, { label: string; color: string }> = {
   easy: { label: "Easy to cancel", color: "text-green-500" },
@@ -30,6 +32,8 @@ export default function AddSubscriptionModal({
   currentMonthlyTotal?: number
   budgetLimit?: number
 }) {
+  const { settings } = useUserSettings()
+  const currency = settings.currency
   const [searchQuery, setSearchQuery] = useState("")
   const [selectedTemplate, setSelectedTemplate] = useState<SubscriptionTemplate | null>(null)
   const [selectedTier, setSelectedTier] = useState<PriceTier | null>(null)
@@ -215,7 +219,7 @@ export default function AddSubscriptionModal({
                         </div>
                       </div>
                       <p className="text-sm font-bold text-[#FFD166]">
-                        from ${template.commonPrices[0]?.price ?? "—"}/
+                        from {formatCurrency(template.commonPrices[0]?.price ?? 0, currency)}/
                         {template.commonPrices[0]?.billingCycle === "yearly" ? "yr" : "mo"}
                       </p>
                     </button>
@@ -279,7 +283,7 @@ export default function AddSubscriptionModal({
                         >
                           <span className="block">{tier.label}</span>
                           <span className="block font-bold">
-                            ${tier.price}/{tier.billingCycle === "yearly" ? "yr" : tier.billingCycle === "lifetime" ? "once" : "mo"}
+                            {formatCurrency(tier.price, currency)}/{tier.billingCycle === "yearly" ? "yr" : tier.billingCycle === "lifetime" ? "once" : "mo"}
                           </span>
                         </button>
                       )
@@ -354,7 +358,7 @@ export default function AddSubscriptionModal({
 
               <div>
                 <label htmlFor="custom-price" className={`block text-sm font-medium mb-2 ${darkMode ? "text-gray-300" : "text-gray-700"}`}>
-                  Price ($) <span aria-hidden="true">*</span>
+                  Price ({currency}) <span aria-hidden="true">*</span>
                 </label>
                 <input
                   id="custom-price"

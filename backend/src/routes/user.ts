@@ -7,8 +7,11 @@
 import express, { Response } from 'express';
 import { supabase } from '../config/database';
 import { authenticate, AuthenticatedRequest } from '../middleware/auth';
+import { validateRequest } from '../utils/validation';
+import { userProfileUpdateSchema } from '../schemas/user-profile';
 import logger from '../config/logger';
 import { roleService } from '../services/role-service';
+import { createStealthAddressLimiter } from '../middleware/rate-limit-factory';
 
 const router = express.Router();
 router.use(authenticate);
@@ -29,6 +32,49 @@ router.get('/role', async (req: AuthenticatedRequest, res: Response) => {
   } catch (error) {
     logger.error('Error getting user role:', error);
     return res.status(500).json({ success: false, error: 'Failed to get user role' });
+  }
+});
+
+router.post('/stealth-meta-address', createStealthAddressLimiter(), async (req: AuthenticatedRequest, res: Response) => {
+  try {
+    const userId = req.user!.id;
+    const { stealthMetaAddress } = req.body as { stealthMetaAddress?: string };
+
+    if (!stealthMetaAddress || typeof stealthMetaAddress !== 'string') {
+      return res.status(400).json({ success: false, error: 'stealthMetaAddress is required' });
+    }
+
+    const decoded = stealthMetaAddress.trim();
+    const isValid = /^(syncro:stealth:v1):([0-9a-f]{64}):([0-9a-f]{64})$/i.test(decoded);
+    if (!isValid) {
+      return res.status(400).json({ success: false, error: 'Invalid stealth meta-address format' });
+    }
+
+    const { error } = await supabase
+      .from('profiles')
+      .update({ stealth_meta_address: decoded, updated_at: new Date().toISOString() })
+      .eq('id', userId);
+
+    if (error) {
+      logger.error('Error saving stealth meta-address:', error);
+      return res.status(500).json({ success: false, error: 'Failed to save stealth meta-address' });
+    }
+
+    return res.status(200).json({ success: true, data: { stealthMetaAddress: decoded } });
+  } catch (error) {
+    logger.error('Error saving stealth meta-address:', error);
+    return res.status(500).json({ success: false, error: 'Failed to save stealth meta-address' });
+  }
+});
+
+router.get('/stealth-payments', async (req: AuthenticatedRequest, res: Response) => {
+  try {
+    const { stealthScanner } = await import('../services/stealth-scanner');
+    const payments = await stealthScanner.scanForPayments(req.user!.id);
+    return res.status(200).json({ success: true, data: payments });
+  } catch (error) {
+    logger.error('Error scanning stealth payments:', error);
+    return res.status(500).json({ success: false, error: 'Failed to scan stealth payments' });
   }
 });
 
@@ -113,6 +159,62 @@ router.delete('/account', async (req: AuthenticatedRequest, res: Response) => {
   } catch (error) {
     logger.error('Error deleting user account:', error);
     return res.status(500).json({ success: false, error: 'Failed to delete account' });
+  }
+});
+
+/**
+ * GET /api/user/profile
+ * Returns the current user's profile data.
+ */
+router.get('/profile', async (req: AuthenticatedRequest, res: Response) => {
+  try {
+    const userId = req.user!.id;
+    const { data: profile, error } = await supabase
+      .from('profiles')
+      .select('id, display_name, company_name, plan_type, stealth_meta_address, created_at, updated_at')
+      .eq('id', userId)
+      .single();
+
+    if (error) {
+      logger.error('Error fetching user profile:', error);
+      return res.status(500).json({ success: false, error: 'Failed to fetch profile' });
+    }
+
+    return res.status(200).json({ success: true, data: profile });
+  } catch (error) {
+    logger.error('Error fetching user profile:', error);
+    return res.status(500).json({ success: false, error: 'Failed to fetch profile' });
+  }
+});
+
+/**
+ * PUT /api/user/profile
+ * Update profile fields such as display name, company name, or stealth meta-address.
+ */
+router.put('/profile', async (req: AuthenticatedRequest, res: Response) => {
+  try {
+    const userId = req.user!.id;
+    const validatedData = validateRequest(userProfileUpdateSchema, req.body);
+
+    const { data: profile, error } = await supabase
+      .from('profiles')
+      .update({
+        ...validatedData,
+        updated_at: new Date().toISOString(),
+      })
+      .eq('id', userId)
+      .select()
+      .single();
+
+    if (error) {
+      logger.error('Error updating user profile:', error);
+      return res.status(500).json({ success: false, error: 'Failed to update profile' });
+    }
+
+    return res.status(200).json({ success: true, data: profile });
+  } catch (error) {
+    logger.error('Error updating user profile:', error);
+    return res.status(500).json({ success: false, error: 'Failed to update profile' });
   }
 });
 

@@ -12,6 +12,17 @@ import {
 import { rpc as SorobanRpc } from "@stellar/stellar-sdk";
 import { createClient, RedisClientType } from "redis";
 import { secretProvider } from "./secret-provider";
+import {
+  getBlockchainFlags,
+  resolveStellarNetwork,
+} from "../../../shared/blockchain-flags";
+import { agentWalletRotationService } from './agent-wallet-rotation';
+import { EXTERNAL_SERVICE_POLICIES } from "../config/external-services";
+import {
+  BLOCKCHAIN_INVOKE_METHODS,
+  resolveSubscriptionMethod,
+} from "../blockchain/backend-contract-bindings";
+import { commitmentStorageService } from "./commitment-storage-service";
 
 export type PayloadVersion = '1.0';
 
@@ -71,19 +82,50 @@ export class BlockchainService {
   private rpcUrl: string;
   private networkPassphrase: string;
   private redisClient: RedisClientType | null = null;
-  private readonly maxRetries = 3;
-  private readonly baseRetryDelayMs = 750;
+  private readonly policy = EXTERNAL_SERVICE_POLICIES.stellar_rpc;
 
   constructor() {
     this.contractAddress = process.env.SOROBAN_CONTRACT_ADDRESS || null;
-    this.rpcUrl =
-      process.env.SOROBAN_RPC_URL || "https://soroban-testnet.stellar.org";
+
+    const flags = getBlockchainFlags();
+    const network = resolveStellarNetwork();
+
+    // Resolve RPC URL — never silently fall back to testnet in production.
+    const configuredRpc = process.env.SOROBAN_RPC_URL;
+    if (!configuredRpc && flags.isProduction) {
+      throw new Error(
+        "[blockchain] SOROBAN_RPC_URL must be explicitly set in production. " +
+          "Refusing to fall back to the testnet RPC endpoint.",
+      );
+    }
+    this.rpcUrl = configuredRpc || "https://soroban-testnet.stellar.org";
+
+    // Resolve network passphrase — never silently use testnet passphrase in production.
+    const configuredPassphrase = process.env.STELLAR_NETWORK_PASSPHRASE;
+    if (!configuredPassphrase && flags.isProduction) {
+      throw new Error(
+        "[blockchain] STELLAR_NETWORK_PASSPHRASE must be explicitly set in production. " +
+          "Refusing to fall back to the testnet network passphrase.",
+      );
+    }
     this.networkPassphrase =
-      process.env.STELLAR_NETWORK_PASSPHRASE || Networks.TESTNET;
+      configuredPassphrase ||
+      (network === "mainnet"
+        ? Networks.PUBLIC
+        : network === "futurenet"
+          ? Networks.FUTURENET
+          : Networks.TESTNET);
 
     if (!this.contractAddress) {
       logger.warn(
         "Blockchain contract address not configured. Events will be logged to database only.",
+      );
+    }
+
+    if (!flags.blockchainEnabled) {
+      logger.warn(
+        "ENABLE_BLOCKCHAIN=false — on-chain writes are disabled. " +
+          "All events will be logged to the database only.",
       );
     }
 
@@ -143,6 +185,13 @@ export class BlockchainService {
       }
 
       logger.info("Event logged to database", { logId: dbLog.id });
+
+      // Create privacy-preserving commitment (non-blocking)
+      this.createAndRecordEventCommitment({
+        userId,
+        eventType: "reminder_sent",
+        eventData,
+      }).catch((err) => logger.warn("Non-blocking commitment creation failed:", err));
 
       // If contract address is configured, attempt to write to blockchain
       if (this.contractAddress) {
@@ -237,7 +286,10 @@ export class BlockchainService {
   private async writeToBlockchain(
     eventData: ReminderEventPayload,
   ): Promise<{ transactionHash: string }> {
-    return this.invokeContractWithRetry("log_reminder", this.encodeReminderArgs(eventData));
+    return this.invokeContractWithRetry(
+      BLOCKCHAIN_INVOKE_METHODS.logReminder,
+      this.encodeReminderArgs(eventData),
+    );
   }
 
   /**
@@ -302,6 +354,13 @@ export class BlockchainService {
         operation,
         subscriptionId,
       });
+
+      // Create privacy-preserving commitment (non-blocking)
+      this.createAndRecordEventCommitment({
+        userId,
+        eventType: `subscription_${operation}`,
+        eventData,
+      }).catch((err) => logger.warn("Non-blocking commitment creation failed:", err));
 
       // If contract address is configured, attempt to write to blockchain
       if (this.contractAddress) {
@@ -404,7 +463,7 @@ export class BlockchainService {
     operation: "create" | "update" | "delete" | "cancel" | "pause" | "unpause",
     eventData: SubscriptionEventPayload,
   ): Promise<{ transactionHash: string }> {
-    const method = `subscription_${operation}`;
+    const method = resolveSubscriptionMethod(operation);
     return this.invokeContractWithRetry(method, this.encodeSubscriptionArgs(eventData));
   }
 
@@ -441,6 +500,13 @@ export class BlockchainService {
         logger.error('Failed to log gift card event to database:', dbError);
         throw dbError;
       }
+
+      // Create privacy-preserving commitment (non-blocking)
+      this.createAndRecordEventCommitment({
+        userId,
+        eventType: 'gift_card_attached',
+        eventData,
+      }).catch((err) => logger.warn("Non-blocking commitment creation failed:", err));
 
       if (this.contractAddress) {
         try {
@@ -497,7 +563,10 @@ export class BlockchainService {
   private async writeGiftCardToBlockchain(
     eventData: GiftCardEventPayload
   ): Promise<{ transactionHash: string }> {
-    return this.invokeContractWithRetry("gift_card_attached", this.encodeGiftCardArgs(eventData));
+    return this.invokeContractWithRetry(
+      BLOCKCHAIN_INVOKE_METHODS.giftCardAttached,
+      this.encodeGiftCardArgs(eventData),
+    );
   }
 
   /**
@@ -510,19 +579,44 @@ export class BlockchainService {
     if (!this.contractAddress) {
       throw new Error("SOROBAN_CONTRACT_ADDRESS not configured");
     }
+
+    // Honour the ENABLE_BLOCKCHAIN master switch
+    const flags = getBlockchainFlags();
+    if (!flags.blockchainEnabled) {
+      throw new Error(
+        `[blockchain] On-chain write for "${method}" was blocked: ` +
+          "ENABLE_BLOCKCHAIN is set to false.",
+      );
+    }
+
     const rpc = new SorobanRpc.Server(this.rpcUrl);
     
-    // Fetch secret from provider
-    const secret = await secretProvider.getSecret("STELLAR_SECRET_KEY");
-    if (!secret) {
-      throw new Error("STELLAR_SECRET_KEY not configured");
+    // Use rotated agent wallet keypair instead of a single static secret key.
+    // The "executor" agent is used for contract invocations; its address rotates
+    // on a configurable schedule (per-task, daily, weekly) to prevent address
+    // clustering.
+    let sourceKeypair: Keypair;
+    try {
+      const derived = await agentWalletRotationService.getActiveKeypair('executor');
+      sourceKeypair = derived.keypair;
+    } catch {
+      // Fallback to the legacy STELLAR_SECRET_KEY if the rotation service
+      // is not configured (e.g., AGENT_MASTER_SEED not set).
+      const secret = await secretProvider.getSecret("STELLAR_SECRET_KEY");
+      if (!secret) {
+        throw new Error(
+          "No signing key available: configure AGENT_MASTER_SEED (for HD wallet rotation) " +
+          "or set STELLAR_SECRET_KEY (legacy fallback).",
+        );
+      }
+      sourceKeypair = Keypair.fromSecret(secret);
     }
-    
-    const sourceKeypair = Keypair.fromSecret(secret);
     const contract = new Contract(this.contractAddress);
 
     let lastErr: unknown = null;
-    for (let attempt = 0; attempt < this.maxRetries; attempt++) {
+    const { maxAttempts = 3, initialDelay = 500, multiplier = 2 } = this.policy.retryPolicy;
+
+    for (let attempt = 0; attempt < maxAttempts; attempt++) {
       try {
         const account = await rpc.getAccount(sourceKeypair.publicKey());
         const tx = new TransactionBuilder(account, {
@@ -530,7 +624,7 @@ export class BlockchainService {
           networkPassphrase: this.networkPassphrase,
         })
           .addOperation(contract.call(method, ...args))
-          .setTimeout(30)
+          .setTimeout(Math.floor(this.policy.timeoutMs / 1000))
           .build();
 
         const sim = await rpc.simulateTransaction(tx);
@@ -550,15 +644,15 @@ export class BlockchainService {
         const getTx = await rpc.getTransaction(send.hash);
         if (getTx.status === "NOT_FOUND") {
           // brief wait+retry fetch
-          await this.sleep(500);
+          await this.sleep(initialDelay);
         }
 
         return { transactionHash: send.hash };
       } catch (err) {
         lastErr = err;
-        const delay = this.baseRetryDelayMs * Math.pow(2, attempt);
+        const delay = Math.min(initialDelay * Math.pow(multiplier, attempt), this.policy.retryPolicy.maxDelay || 30000);
         logger.warn(
-          `Soroban tx attempt ${attempt + 1}/${this.maxRetries} failed for method ${method}: ${
+          `Soroban tx attempt ${attempt + 1}/${maxAttempts} failed for method ${method}: ${
             err instanceof Error ? err.message : String(err)
           } — retrying in ${delay}ms`,
         );
@@ -573,16 +667,114 @@ export class BlockchainService {
       payload: this.previewArgs(args),
       failedAt: new Date().toISOString(),
       errorReason: lastErr instanceof Error ? lastErr.message : String(lastErr),
-      retryCount: this.maxRetries,
+      retryCount: maxAttempts,
       contractAddress: this.contractAddress,
       rpcUrl: this.rpcUrl,
     });
 
     throw new Error(
-      `Soroban transaction failed after ${this.maxRetries} attempts: ${
+      `Soroban transaction failed after ${maxAttempts} attempts: ${
         lastErr instanceof Error ? lastErr.message : String(lastErr)
       }`,
     );
+  }
+
+  async recordCommitment(
+    commitmentHash: Buffer,
+  ): Promise<{ commitmentIndex: number; transactionHash?: string; error?: string }> {
+    if (!this.contractAddress) {
+      return { commitmentIndex: -1, error: 'SOROBAN_CONTRACT_ADDRESS not configured' };
+    }
+
+    try {
+      const args = [xdr.ScVal.scvBytes(commitmentHash)];
+      const result = await this.invokeContractWithRetry(
+        BLOCKCHAIN_INVOKE_METHODS.recordCommitment,
+        args,
+      );
+
+      const sim = await this.simulateContractCall(
+        BLOCKCHAIN_INVOKE_METHODS.recordCommitment,
+        args,
+      );
+
+      return {
+        commitmentIndex: sim ?? -1,
+        transactionHash: result.transactionHash,
+      };
+    } catch (err) {
+      const errorMessage = err instanceof Error ? err.message : String(err);
+      logger.error('Failed to record commitment on-chain:', errorMessage);
+      return { commitmentIndex: -1, error: errorMessage };
+    }
+  }
+
+  private async simulateContractCall(
+    method: string,
+    args: xdr.ScVal[],
+  ): Promise<number | null> {
+    try {
+      if (!this.contractAddress) return null;
+
+      const rpc = new SorobanRpc.Server(this.rpcUrl);
+      const secret = await secretProvider.getSecret("STELLAR_SECRET_KEY");
+      if (!secret) return null;
+
+      const sourceKeypair = Keypair.fromSecret(secret);
+      const contract = new Contract(this.contractAddress);
+
+      const account = await rpc.getAccount(sourceKeypair.publicKey());
+      const tx = new TransactionBuilder(account, {
+        fee: "100",
+        networkPassphrase: this.networkPassphrase,
+      })
+        .addOperation(contract.call(method, ...args))
+        .setTimeout(30)
+        .build();
+
+      const sim = await rpc.simulateTransaction(tx);
+      if (SorobanRpc.Api.isSimulationError(sim)) {
+        logger.warn(`Simulation failed for ${method}: ${sim.error}`);
+        return null;
+      }
+
+      const result = SorobanRpc.Api.isSimulationSuccess(sim) ? sim.result : null;
+      if (result && result.retval) {
+        const val = result.retval;
+        if (val?.switch()?.name === 'scvU64') {
+          return Number(val.u64());
+        }
+      }
+      return null;
+    } catch (err) {
+      logger.warn(`Simulation error for ${method}:`, err);
+      return null;
+    }
+  }
+
+  async createAndRecordEventCommitment(params: {
+    userId: string;
+    eventType: string;
+    eventData: Record<string, unknown>;
+  }): Promise<{ commitmentHash: Buffer; dbId: string | null; commitmentIndex: number } | null> {
+    try {
+      const { commitmentHash, dbId } = await commitmentStorageService.createAndStoreCommitment(params);
+
+      const onChain = await this.recordCommitment(commitmentHash);
+
+      if (dbId && onChain.commitmentIndex >= 0) {
+        await commitmentStorageService.updateCommitmentIndex(dbId, onChain.commitmentIndex);
+      }
+
+      return {
+        commitmentHash,
+        dbId,
+        commitmentIndex: onChain.commitmentIndex,
+      };
+    } catch (err) {
+      logger.error('Failed to create and record event commitment:', err);
+      return null;
+    }
   }
 
   private encodeReminderArgs(eventData: ReminderEventPayload): xdr.ScVal[] {

@@ -131,16 +131,10 @@ curl -X POST /api/payments/refund \
 
 ## High Priority Issues
 
-### 🟠 HIGH #1: Missing Rate Limiting on CSV Import
-**Route:** `POST /api/subscriptions/import`  
-**File:** `client/app/api/subscriptions/import/route.ts`
+### ✅ RESOLVED: Route-Level Rate Limiting (Issue #29)
+**Routes:** `POST /api/subscriptions/import`, payment mutations, tag mutations
 
-**Issue:**
-- No rate limiting on bulk import endpoint
-- User can spam imports and potentially DoS the service
-- File size limit exists (500 rows) but no request frequency limit
-
-**Recommendation:** Add strict rate limiting (e.g., 5 imports per hour)
+**Status:** Env-configurable `RateLimiters.import`, `RateLimiters.payment`, and `RateLimiters.tagMutation` with `X-RateLimit-*` and `Retry-After` headers.
 
 ---
 

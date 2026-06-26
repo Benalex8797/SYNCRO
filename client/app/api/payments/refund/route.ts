@@ -1,5 +1,5 @@
 import { type NextRequest } from "next/server"
-import { createApiRoute, createSuccessResponse, validateRequestBody, RateLimiters, ApiErrors, checkOwnership } from "@/lib/api/index"
+import { createAuthenticatedApiRoute, createSuccessResponse, validateRequestBody, RateLimiters, ApiErrors, checkOwnership, emitAuditEvent } from "@/lib/api/index"
 import { HttpStatus } from "@/lib/api/types"
 import { z } from "zod"
 import { PaymentService } from "@/lib/payment-service"
@@ -10,12 +10,8 @@ const refundSchema = z.object({
   transactionId: z.string().min(1, "Transaction ID is required"),
 })
 
-export const POST = createApiRoute(
+export const POST = createAuthenticatedApiRoute(
   async (request: NextRequest, context, user) => {
-    if (!user) {
-      throw ApiErrors.unauthorized("User not authenticated")
-    }
-
     // Validate request body
     const body = await validateRequestBody(request, refundSchema)
 
@@ -37,7 +33,7 @@ export const POST = createApiRoute(
 
     // Check if payment is already refunded
     if (payment.status === "refunded") {
-      throw ApiErrors.badRequest("Payment has already been refunded")
+      throw ApiErrors.validationError("Payment has already been refunded")
     }
 
     const paymentService = new PaymentService({
@@ -50,6 +46,13 @@ export const POST = createApiRoute(
       throw ApiErrors.internalError(`Refund failed: ${result.error || "Unknown error"}`)
     }
 
+    emitAuditEvent({
+      userId: user.id,
+      action: "payment.refund",
+      resourceType: "payment",
+      resourceId: body.transactionId,
+    })
+
     return createSuccessResponse(
       {
         refundId: result.transactionId,
@@ -60,7 +63,7 @@ export const POST = createApiRoute(
     )
   },
   {
-    requireAuth: true,
-    rateLimit: RateLimiters.strict,
+    rateLimit: RateLimiters.payment,
+    idempotent: true,
   }
 )

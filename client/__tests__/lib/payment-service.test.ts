@@ -64,6 +64,35 @@ describe('PaymentService', () => {
             expect(result.success).toBe(false)
             expect(result.error).toContain('not enabled')
         })
+
+        it('should reject mock payments in production even when ENABLE_MOCK_PAYMENTS=true', async () => {
+            // Production builds must NEVER allow mock mode regardless of env var
+            process.env.NODE_ENV = 'production'
+            process.env.ENABLE_MOCK_PAYMENTS = 'true'
+
+            const service = new PaymentService({ provider: 'mock' })
+            const result = await service.processPayment(100, 'USD', 'test-token', {
+                userId: 'user-123',
+                planName: 'Pro',
+            })
+
+            expect(result.success).toBe(false)
+            expect(result.error).toContain('not enabled')
+        })
+
+        it('should allow mock payments in test environment', async () => {
+            process.env.NODE_ENV = 'test'
+            process.env.ENABLE_MOCK_PAYMENTS = 'false'
+
+            const service = new PaymentService({ provider: 'mock' })
+            const result = await service.processPayment(100, 'USD', 'test-token', {
+                userId: 'user-123',
+                planName: 'Pro',
+            })
+
+            expect(result.success).toBe(true)
+            expect(result.transactionId).toMatch(/^mock_/)
+        })
     })
 
     describe('Stripe Payment Processing', () => {

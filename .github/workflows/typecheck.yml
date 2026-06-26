@@ -5,36 +5,79 @@ on:
     branches: [main]
   pull_request:
     branches: [main]
+  workflow_dispatch:
+    inputs:
+      force_full_run:
+        description: "Force a full typecheck run"
+        type: boolean
+        default: false
 
 jobs:
-  typecheck-backend:
-    name: TypeScript Check (Backend)
+  changes:
     runs-on: ubuntu-latest
-    defaults:
-      run:
-        working-directory: backend
+    outputs:
+      backend: ${{ steps.filter.outputs.backend }}
+      client: ${{ steps.filter.outputs.client }}
+      sdk: ${{ steps.filter.outputs.sdk }}
+      shared: ${{ steps.filter.outputs.shared }}
+      root: ${{ steps.filter.outputs.root }}
+      force_full_run: ${{ github.event.inputs.force_full_run || 'false' }}
     steps:
-      - uses: actions/checkout@v6
-      - uses: actions/setup-node@v6
+      - uses: actions/checkout@v7
+      - uses: dorny/paths-filter@v4
+        id: filter
         with:
-          node-version: "20"
-          cache: "npm"
-          cache-dependency-path: backend/package-lock.json
-      - run: npm ci
-      - run: npx tsc --noEmit
+          filters: |
+            backend:
+              - 'backend/**'
+              - 'shared/**'
+            client:
+              - 'client/**'
+              - 'shared/**'
+            sdk:
+              - 'sdk/**'
+              - 'shared/**'
+            shared:
+              - 'shared/**'
+            root:
+              - 'app/**'
+              - 'scripts/**'
+              - 'package.json'
+              - 'package-lock.json'
+              - 'tsconfig.json'
 
-  typecheck-client:
-    name: TypeScript Check (Client)
+  typecheck:
+    name: Typecheck (${{ matrix.package }})
     runs-on: ubuntu-latest
-    defaults:
-      run:
-        working-directory: client
+    needs: changes
+    strategy:
+      fail-fast: false
+      matrix:
+        package: [backend, client, sdk, shared, root]
+
+    if: |
+      needs.changes.outputs.force_full_run == 'true' ||
+      (matrix.package == 'backend' && needs.changes.outputs.backend == 'true') ||
+      (matrix.package == 'client' && needs.changes.outputs.client == 'true') ||
+      (matrix.package == 'sdk' && needs.changes.outputs.sdk == 'true') ||
+      (matrix.package == 'shared' && needs.changes.outputs.shared == 'true') ||
+      (matrix.package == 'root' && (needs.changes.outputs.backend == 'true' || needs.changes.outputs.client == 'true' || needs.changes.outputs.sdk == 'true' || needs.changes.outputs.shared == 'true' || needs.changes.outputs.root == 'true'))
+
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
+
       - uses: actions/setup-node@v6
         with:
           node-version: "20"
           cache: "npm"
-          cache-dependency-path: client/package-lock.json
-      - run: npm ci
-      - run: npx tsc --noEmit
+
+      - name: Install dependencies
+        run: npm install
+
+      - name: Run Typecheck
+        run: |
+          if [ "${{ matrix.package }}" = "root" ]; then
+            npm run typecheck:root
+          else
+            npm run typecheck -w ${{ matrix.package }}
+          fi

@@ -4,6 +4,11 @@
 
 SYNCRO uses a `.github/CODEOWNERS` file to enforce required reviews based on code ownership boundaries. This document outlines the review process, escalation paths, and handoff procedures.
 
+**Related Documentation**:
+- [Directory Ownership Matrix](../DIRECTORY_OWNERSHIP_MATRIX.md) - Detailed ownership information
+- [Ownership Quick Reference](../OWNERSHIP_QUICK_REFERENCE.md) - Quick lookup guide
+- [CODEOWNERS](../.github/CODEOWNERS) - GitHub enforcement
+
 ## Ownership Boundaries
 
 | Area | Owner | Primary Responsibility |
@@ -13,7 +18,12 @@ SYNCRO uses a `.github/CODEOWNERS` file to enforce required reviews based on cod
 | **contracts/** | Smart Contract Team | Blockchain logic, delegation, renewal windows |
 | **supabase/** | Infrastructure Team | Database migrations, RLS policies, seed data |
 | **sdk/** | SDK Team | Reminder SDK, logger, public APIs |
+| **shared/** | Platform Team | Shared types, domain models |
+| **docs/** | Documentation Team | Technical documentation, guides |
+| **scripts/** | DevOps Team | Automation scripts, utilities |
 | **.github/** | DevOps/Maintainer | CI/CD workflows, branch protection, automation |
+
+**For detailed ownership information**, see [Directory Ownership Matrix](../DIRECTORY_OWNERSHIP_MATRIX.md).
 
 ## Review Requirements
 
@@ -172,5 +182,14 @@ A: No. Even maintainers require at least 1 peer review. Merge only after approva
 
 ---
 
-**Last updated:** 2026-04-27  
+## Related Documentation
+
+- [Directory Ownership Matrix](../DIRECTORY_OWNERSHIP_MATRIX.md) - Detailed ownership for all directories
+- [Ownership Quick Reference](../OWNERSHIP_QUICK_REFERENCE.md) - Quick lookup guide
+- [CODEOWNERS](../.github/CODEOWNERS) - GitHub enforcement file
+- [Contributing Guide](../CONTRIBUTING.md) - Contribution guidelines
+
+---
+
+**Last updated:** 2026-05-27  
 **Maintained by:** @Calebux

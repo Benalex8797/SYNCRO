@@ -2,6 +2,12 @@
  * PayPal Payment Service
  * Implements PayPal Orders API v2 for payment processing
  * 
+ * Features:
+ * - OAuth 2.0 authentication with token caching
+ * - Automatic retry logic for transient failures
+ * - Comprehensive error handling with specific error codes
+ * - Order creation, capture, and refund support
+ * 
  * @see https://developer.paypal.com/docs/api/orders/v2/
  */
 
@@ -9,6 +15,18 @@ export interface PayPalConfig {
     clientId: string
     clientSecret: string
     mode: 'sandbox' | 'live'
+    maxRetries?: number
+    retryDelay?: number
+}
+
+export interface PayPalError {
+    name: string
+    message: string
+    debug_id?: string
+    details?: Array<{
+        issue: string
+        description: string
+    }>
 }
 
 export interface PayPalOrderResponse {
@@ -44,6 +62,8 @@ export class PayPalService {
     private baseUrl: string
     private accessToken: string | null = null
     private tokenExpiry: number = 0
+    private maxRetries: number
+    private retryDelay: number
 
     constructor(config: PayPalConfig) {
         this.clientId = config.clientId
@@ -51,6 +71,52 @@ export class PayPalService {
         this.baseUrl = config.mode === 'live'
             ? 'https://api-m.paypal.com'
             : 'https://api-m.sandbox.paypal.com'
+        this.maxRetries = config.maxRetries || 3
+        this.retryDelay = config.retryDelay || 1000
+    }
+
+    /**
+     * Retry logic for transient failures
+     */
+    private async retryWithBackoff<T>(
+        operation: () => Promise<T>,
+        operationName: string,
+        retries = this.maxRetries
+    ): Promise<T> {
+        try {
+            return await operation()
+        } catch (error: any) {
+            // Don't retry on client errors (4xx) except 408, 429
+            if (error.statusCode && error.statusCode >= 400 && error.statusCode < 500) {
+                if (error.statusCode !== 408 && error.statusCode !== 429) {
+                    throw error
+                }
+            }
+
+            if (retries <= 0) {
+                console.error(`[PayPalService] ${operationName} failed after all retries`)
+                throw error
+            }
+
+            const delay = this.retryDelay * (this.maxRetries - retries + 1)
+            console.warn(
+                `[PayPalService] ${operationName} failed, retrying in ${delay}ms... (${retries} retries left)`
+            )
+
+            await new Promise(resolve => setTimeout(resolve, delay))
+            return this.retryWithBackoff(operation, operationName, retries - 1)
+        }
+    }
+
+    /**
+     * Parse PayPal error response
+     */
+    private parsePayPalError(error: any): string {
+        if (error.details && Array.isArray(error.details)) {
+            const issues = error.details.map((d: any) => d.description || d.issue).join('; ')
+            return `${error.message || 'PayPal error'}: ${issues}`
+        }
+        return error.message || 'Unknown PayPal error'
     }
 
     /**
@@ -62,7 +128,7 @@ export class PayPalService {
             return this.accessToken
         }
 
-        try {
+        return this.retryWithBackoff(async () => {
             const auth = Buffer.from(`${this.clientId}:${this.clientSecret}`).toString('base64')
 
             const response = await fetch(`${this.baseUrl}/v1/oauth2/token`, {
@@ -75,8 +141,10 @@ export class PayPalService {
             })
 
             if (!response.ok) {
-                const error = await response.text()
-                throw new Error(`PayPal auth failed: ${error}`)
+                const error = await response.json().catch(() => ({ message: response.statusText }))
+                const err: any = new Error(`PayPal auth failed: ${this.parsePayPalError(error)}`)
+                err.statusCode = response.status
+                throw err
             }
 
             const data = await response.json()
@@ -85,10 +153,7 @@ export class PayPalService {
             this.tokenExpiry = Date.now() + ((data.expires_in - 300) * 1000)
 
             return this.accessToken
-        } catch (error) {
-            console.error('[PayPalService] Failed to get access token:', error)
-            throw new Error('Failed to authenticate with PayPal')
-        }
+        }, 'getAccessToken')
     }
 
     /**
@@ -104,7 +169,7 @@ export class PayPalService {
             cancelUrl: string
         }
     ): Promise<PayPalOrderResponse> {
-        try {
+        return this.retryWithBackoff(async () => {
             const accessToken = await this.getAccessToken()
 
             const orderData = {
@@ -132,31 +197,31 @@ export class PayPalService {
                 headers: {
                     'Authorization': `Bearer ${accessToken}`,
                     'Content-Type': 'application/json',
+                    'Prefer': 'return=representation',
                 },
                 body: JSON.stringify(orderData),
             })
 
             if (!response.ok) {
-                const error = await response.json()
+                const error = await response.json().catch(() => ({ message: response.statusText }))
                 console.error('[PayPalService] Order creation failed:', error)
-                throw new Error(`PayPal order creation failed: ${error.message || 'Unknown error'}`)
+                const err: any = new Error(`PayPal order creation failed: ${this.parsePayPalError(error)}`)
+                err.statusCode = response.status
+                throw err
             }
 
             const order = await response.json()
             console.log('[PayPalService] Order created successfully:', order.id)
 
             return order
-        } catch (error) {
-            console.error('[PayPalService] createOrder error:', error)
-            throw error
-        }
+        }, 'createOrder')
     }
 
     /**
      * Capture payment for an approved order
      */
     async captureOrder(orderId: string): Promise<PayPalCaptureResponse> {
-        try {
+        return this.retryWithBackoff(async () => {
             const accessToken = await this.getAccessToken()
 
             const response = await fetch(`${this.baseUrl}/v2/checkout/orders/${orderId}/capture`, {
@@ -164,30 +229,30 @@ export class PayPalService {
                 headers: {
                     'Authorization': `Bearer ${accessToken}`,
                     'Content-Type': 'application/json',
+                    'Prefer': 'return=representation',
                 },
             })
 
             if (!response.ok) {
-                const error = await response.json()
+                const error = await response.json().catch(() => ({ message: response.statusText }))
                 console.error('[PayPalService] Capture failed:', error)
-                throw new Error(`PayPal capture failed: ${error.message || 'Unknown error'}`)
+                const err: any = new Error(`PayPal capture failed: ${this.parsePayPalError(error)}`)
+                err.statusCode = response.status
+                throw err
             }
 
             const capture = await response.json()
             console.log('[PayPalService] Payment captured successfully:', capture.id)
 
             return capture
-        } catch (error) {
-            console.error('[PayPalService] captureOrder error:', error)
-            throw error
-        }
+        }, 'captureOrder')
     }
 
     /**
      * Get order details
      */
     async getOrder(orderId: string): Promise<PayPalOrderResponse> {
-        try {
+        return this.retryWithBackoff(async () => {
             const accessToken = await this.getAccessToken()
 
             const response = await fetch(`${this.baseUrl}/v2/checkout/orders/${orderId}`, {
@@ -199,22 +264,21 @@ export class PayPalService {
             })
 
             if (!response.ok) {
-                const error = await response.json()
-                throw new Error(`Failed to get order: ${error.message || 'Unknown error'}`)
+                const error = await response.json().catch(() => ({ message: response.statusText }))
+                const err: any = new Error(`Failed to get order: ${this.parsePayPalError(error)}`)
+                err.statusCode = response.status
+                throw err
             }
 
             return await response.json()
-        } catch (error) {
-            console.error('[PayPalService] getOrder error:', error)
-            throw error
-        }
+        }, 'getOrder')
     }
 
     /**
      * Refund a captured payment
      */
     async refundCapture(captureId: string, amount?: number, currency?: string): Promise<any> {
-        try {
+        return this.retryWithBackoff(async () => {
             const accessToken = await this.getAccessToken()
 
             const refundData: any = {}
@@ -232,25 +296,25 @@ export class PayPalService {
                     headers: {
                         'Authorization': `Bearer ${accessToken}`,
                         'Content-Type': 'application/json',
+                        'Prefer': 'return=representation',
                     },
                     body: JSON.stringify(refundData),
                 }
             )
 
             if (!response.ok) {
-                const error = await response.json()
+                const error = await response.json().catch(() => ({ message: response.statusText }))
                 console.error('[PayPalService] Refund failed:', error)
-                throw new Error(`PayPal refund failed: ${error.message || 'Unknown error'}`)
+                const err: any = new Error(`PayPal refund failed: ${this.parsePayPalError(error)}`)
+                err.statusCode = response.status
+                throw err
             }
 
             const refund = await response.json()
             console.log('[PayPalService] Refund processed successfully:', refund.id)
 
             return refund
-        } catch (error) {
-            console.error('[PayPalService] refundCapture error:', error)
-            throw error
-        }
+        }, 'refundCapture')
     }
 }
 

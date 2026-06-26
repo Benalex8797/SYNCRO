@@ -4,6 +4,8 @@ import { authenticate, AuthenticatedRequest } from '../middleware/auth';
 import { giftCardLedgerService } from '../services/gift-card-ledger-service';
 import { validate } from '../middleware/validate';
 import { BadRequestError } from '../errors';
+import { parseDbError } from '../utils/db-constraint-errors';
+import { validateLimit } from '../utils/pagination';
 
 const router = Router();
 router.use(authenticate);
@@ -29,16 +31,31 @@ router.get('/balance', async (req: AuthenticatedRequest, res: Response) => {
 /** GET /api/gift-card-ledger/history */
 // VALIDATION_BYPASS: Simple integer parsing
 router.get('/history', async (req: AuthenticatedRequest, res: Response) => {
-  const limit = Math.min(parseInt(req.query.limit as string) || 50, 100);
-  const history = await giftCardLedgerService.getHistory(req.user!.id, limit);
-  res.json({ success: true, data: history });
+  try {
+    const limit = validateLimit(req.query.limit, 100, 50);
+    const history = await giftCardLedgerService.getHistory(req.user!.id, limit);
+    res.json({ success: true, data: history });
+  } catch (error: any) {
+    if (error.name === 'PaginationError') {
+      throw new BadRequestError(error.message);
+    }
+    throw error;
+  }
 });
 
 /** POST /api/gift-card-ledger/top-up */
 router.post('/top-up', validate(topUpSchema), async (req: AuthenticatedRequest, res: Response) => {
-  const { amount, description } = req.body;
-  const entry = await giftCardLedgerService.topUp(req.user!.id, amount, description);
-  res.status(201).json({ success: true, data: entry });
+  try {
+    const { amount, description } = req.body;
+    const entry = await giftCardLedgerService.topUp(req.user!.id, amount, description);
+    res.status(201).json({ success: true, data: entry });
+  } catch (err: any) {
+    const appError = parseDbError(err);
+    if (appError) {
+      return res.status(appError.status).json({ success: false, error: appError.message, field: appError.field });
+    }
+    throw err;
+  }
 });
 
 /** POST /api/gift-card-ledger/deduct */
