@@ -32,6 +32,9 @@ export const userPreferencesUpdateSchema = z.object({
   currency: z.string().min(3).max(5).optional(),
   timezone: z.string().optional(),
   locale: z.string().optional(),
+  preferred_gift_card_provider: z
+    .enum(['atomic_wallet', 'bitrefill', 'coincards'])
+    .optional(),
   privacy_mode_enabled: z.boolean().optional(),
   encryption_key: z.string().optional(),
 });

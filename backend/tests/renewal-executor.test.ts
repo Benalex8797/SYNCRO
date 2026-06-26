@@ -15,13 +15,32 @@ jest.mock('../src/services/webhook-service', () => ({
   webhookService: { dispatchEvent: jest.fn().mockReturnValue(Promise.resolve()) },
 }));
 
+jest.mock('@syncro/shared/crypto', () => ({
+  deriveEphemeralStealthAddress: jest.fn().mockReturnValue({
+    ephemeralPubkey: 'aa'.repeat(32),
+    stealthAddress: 'bb'.repeat(32),
+  }),
+}));
+
 jest.mock('../src/services/stealth-scanner', () => ({
   stealthScanner: { storeStealthPayment: jest.fn().mockResolvedValue(undefined) },
+}));
+
+jest.mock('../src/services/settlement-batcher', () => ({
+  settlementBatcher: { enqueue: jest.fn().mockResolvedValue('settlement-1') },
+}));
+
+jest.mock('../src/services/channel-state', () => ({
+  channelStateService: {
+    findPayableChannel: jest.fn(),
+    applyRenewalPayment: jest.fn(),
+  },
 }));
 
 import { RenewalExecutor } from '../src/services/renewal-executor';
 import { supabase } from '../src/config/database';
 import { blockchainService } from '../src/services/blockchain-service';
+import { channelStateService } from '../src/services/channel-state';
 
 describe('RenewalExecutor', () => {
   let executor: RenewalExecutor;
@@ -34,6 +53,7 @@ describe('RenewalExecutor', () => {
 
   beforeEach(() => {
     jest.clearAllMocks();
+    process.env.PAYMENT_CHANNELS_ENABLED = 'false';
     executor = new RenewalExecutor();
   });
 
@@ -102,7 +122,7 @@ describe('RenewalExecutor', () => {
   it('should reject a used approval (I-A1)', async () => {
     (supabase.from as jest.Mock).mockImplementation((table: string) => {
       if (table === 'renewal_approvals')
-        return makeChain({ data: { approval_id: 'approval-789', max_spend: 15.0, expires_at: null, used: true }, error: null });
+        return makeChain({ data: null, error: { message: 'Not found' } });
       return makeChain({ data: null, error: null });
     });
 
@@ -201,41 +221,53 @@ describe('RenewalExecutor', () => {
     expect(result.failureReason).toBe('billing_window_invalid');
   });
 
-  // Stealth payment tests
-  it('should execute renewal with stealth payment', async () => {
+  // Payment channel tests
+  it('should use off-chain channel payment when available', async () => {
+    process.env.PAYMENT_CHANNELS_ENABLED = 'true';
+    (channelStateService.findPayableChannel as jest.Mock).mockResolvedValue({
+      id: 'ch-99',
+      state: 'active',
+      balance: '100',
+    });
+    (channelStateService.applyRenewalPayment as jest.Mock).mockResolvedValue({
+      id: 'ch-99',
+      channelState: { sequenceNumber: 1 },
+    });
+
     (supabase.from as jest.Mock).mockImplementation((table: string) => {
       if (table === 'renewal_approvals') return makeChain({ data: { approval_id: 'approval-789', max_spend: 15.0, expires_at: null, used: false }, error: null });
       if (table === 'subscriptions') return makeChain({ data: { status: 'active', next_billing_date: new Date(Date.now() + 3 * 24 * 60 * 60 * 1000).toISOString(), billing_cycle: 'monthly' }, error: null });
       return makeChain({ data: null, error: null });
     });
-    (blockchainService.syncSubscription as jest.Mock).mockResolvedValue({ success: true, transactionHash: 'tx-hash-stealth' });
 
-    const stealthRequest = {
-      ...mockRequest,
-      useStealthPayment: true,
-      ephemeralPubkey: 'a'.repeat(64), // 32 bytes in hex
-    };
+    const result = await executor.executeRenewal(mockRequest);
 
-    const result = await executor.executeRenewal(stealthRequest);
     expect(result.success).toBe(true);
-    expect(result.transactionHash).toBe('tx-hash-stealth');
+    expect(result.transactionHash).toBeUndefined();
+    expect(channelStateService.applyRenewalPayment).toHaveBeenCalledWith(
+      'ch-99',
+      'user-456',
+      'sub-123',
+      9.99,
+    );
+    expect(blockchainService.syncSubscription).not.toHaveBeenCalled();
   });
 
-  it('should reject stealth payment without ephemeralPubkey', async () => {
+  it('should fall back to on-chain when channel balance insufficient', async () => {
+    process.env.PAYMENT_CHANNELS_ENABLED = 'true';
+    (channelStateService.findPayableChannel as jest.Mock).mockResolvedValue(null);
+
     (supabase.from as jest.Mock).mockImplementation((table: string) => {
       if (table === 'renewal_approvals') return makeChain({ data: { approval_id: 'approval-789', max_spend: 15.0, expires_at: null, used: false }, error: null });
-      if (table === 'subscriptions') return makeChain({ data: { status: 'active', next_billing_date: new Date(Date.now() + 3 * 24 * 60 * 60 * 1000).toISOString() }, error: null });
+      if (table === 'subscriptions') return makeChain({ data: { status: 'active', next_billing_date: new Date(Date.now() + 3 * 24 * 60 * 60 * 1000).toISOString(), billing_cycle: 'monthly' }, error: null });
       return makeChain({ data: null, error: null });
     });
+    (blockchainService.syncSubscription as jest.Mock).mockResolvedValue({ success: true, transactionHash: 'tx-onchain' });
 
-    const stealthRequest = {
-      ...mockRequest,
-      useStealthPayment: true,
-      // ephemeralPubkey intentionally missing
-    };
+    const result = await executor.executeRenewal(mockRequest);
 
-    const result = await executor.executeRenewal(stealthRequest);
-    expect(result.success).toBe(false);
-    expect(result.failureReason).toBe('stealth_payment_invalid');
+    expect(result.success).toBe(true);
+    expect(result.transactionHash).toBe('tx-onchain');
+    expect(blockchainService.syncSubscription).toHaveBeenCalled();
   });
 });

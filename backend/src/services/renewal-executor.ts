@@ -2,7 +2,7 @@ import logger from '../config/logger';
 import { supabase } from '../config/database';
 import { blockchainService } from './blockchain-service';
 import { webhookService } from './webhook-service';
-import { paymentChannelService } from './payment-channel-service';
+import { channelStateService } from './channel-state';
 import { settlementBatcher } from './settlement-batcher';
 import { addMonths, addQuarters, addYears } from 'date-fns';
 import { deriveEphemeralStealthAddress } from '@syncro/shared/crypto';
@@ -240,22 +240,26 @@ export class RenewalExecutor {
       return { used: false };
     }
 
-    const { data: channel } = await supabase
-      .from('payment_channels')
-      .select('id')
-      .eq('user_id', userId)
-      .eq('state', 'active')
-      .order('created_at', { ascending: false })
-      .limit(1)
-      .maybeSingle();
-
-    if (!channel) return { used: false };
-
     try {
-      await paymentChannelService.applyOffChainRenewal(channel.id, userId, amount);
-      logger.info('Off-chain channel renewal applied', { channelId: channel.id, subscriptionId });
+      const channel = await channelStateService.findPayableChannel(userId, amount);
+      if (!channel) return { used: false };
+
+      await channelStateService.applyRenewalPayment(
+        channel.id,
+        userId,
+        subscriptionId,
+        amount,
+      );
+      logger.info('Off-chain channel renewal applied', {
+        channelId: channel.id,
+        subscriptionId,
+      });
       return { used: true };
-    } catch {
+    } catch (err) {
+      logger.warn('Channel renewal failed, falling back to on-chain', {
+        subscriptionId,
+        error: err instanceof Error ? err.message : String(err),
+      });
       return { used: false };
     }
   }

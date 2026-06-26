@@ -10,7 +10,6 @@ import {
   verifyPaymentCommitment,
   type PaymentCommitment,
 } from '@syncro/shared/crypto';
-import { Buffer } from 'node:buffer';
 
 export type ProofBytes = string;
 
@@ -113,18 +112,29 @@ export function verifyPaymentProof(input: VerifyProofInput): boolean {
   }
 }
 
-export { type PaymentCommitment };
-
-function encodeBase64(value: string): string {
-  if (typeof globalThis.btoa === 'function') {
-    return globalThis.btoa(value);
-  }
-  return Buffer.from(value, 'utf8').toString('base64');
+/**
+ * Generate a payment proof and immediately verify it locally.
+ */
+export async function generateAndVerifyProof(
+  input: PaymentProofInput,
+): Promise<PaymentProofResult & { verified: boolean }> {
+  const result = await generatePaymentProof(input);
+  const verified = verifyPaymentProof({ proof: result.proof, publicInputs: result.publicInputs, amount: input.amount });
+  return { ...result, verified };
 }
 
+export { type PaymentCommitment };
+
+/**
+ * Base64-encode a string.
+ * Both `globalThis.btoa` and `globalThis.atob` are available in
+ * Node.js 18+ and all modern browsers, so no fallback is needed.
+ */
+function encodeBase64(value: string): string {
+  return globalThis.btoa(value);
+}
+
+/** Base64-decode a string. */
 function decodeBase64(value: string): string {
-  if (typeof globalThis.atob === 'function') {
-    return globalThis.atob(value);
-  }
-  return Buffer.from(value, 'base64').toString('utf8');
+  return globalThis.atob(value);
 }

@@ -5,6 +5,7 @@ import {
   generateStealthMetaAddress,
   type StealthMetaAddress,
 } from '../../shared/src/types/stealth';
+import { isTorBrowser } from './tor-detection';
 
 type WalletInfo = {
   publicKey: string;
@@ -42,7 +43,12 @@ class StellarWalletService {
     }
 
     const freighter = (window as any).freighter;
-    if (!freighter) throw new Error('Freighter wallet not installed');
+    if (!freighter) {
+      const torNote = isTorBrowser() 
+        ? ' Freighter wallet extensions are not supported in Tor Browser. Please use a regular browser or contact support for alternative payment methods.'
+        : '';
+      throw new Error('Freighter wallet not installed' + torNote);
+    }
 
     const publicKey = await freighter.getPublicKey();
     if (!publicKey) throw new Error('Failed to get public key');
@@ -69,6 +75,46 @@ class StellarWalletService {
     this._encryptionKey = null;
     this.clearSession();
     if (wasConnected) this.emit('walletDisconnected');
+  }
+
+  /**
+   * Checks if recovery should be offered after wallet reconnect
+   * Returns true if user has stealth addresses configured but no recent recovery
+   */
+  async shouldOfferRecovery(): Promise<boolean> {
+    if (typeof window === 'undefined') return false;
+    
+    try {
+      const API_BASE = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3001';
+      const response = await fetch(`${API_BASE}/api/privacy/stealth/status`, {
+        credentials: 'include',
+      });
+      
+      if (!response.ok) return false;
+      
+      const data = await response.json();
+      
+      // Show recovery option if stealth is configured
+      if (!data.configured) return false;
+      
+      // Check if recovery has been run recently (last 7 days)
+      const lastRecoveryTime = localStorage.getItem('lastStealthRecovery');
+      if (!lastRecoveryTime) return true; // Never run, should offer
+      
+      const daysSinceRecovery = (Date.now() - parseInt(lastRecoveryTime, 10)) / (1000 * 60 * 60 * 24);
+      return daysSinceRecovery > 7; // Offer if not run in last 7 days
+    } catch (err) {
+      console.error('Failed to check recovery status:', err);
+      return false;
+    }
+  }
+
+  /**
+   * Mark that recovery was run (for throttling offers)
+   */
+  recordRecoveryRun(): void {
+    if (typeof window === 'undefined') return;
+    localStorage.setItem('lastStealthRecovery', Date.now().toString());
   }
 
   getWallet(): WalletInfo | null {
@@ -229,4 +275,81 @@ class StellarWalletService {
 }
 
 export const stellarWallet = new StellarWalletService();
+export type { WalletInfo, WalletEventType };
+
+/**
+ * Custom error class for Stellar wallet operations
+ */
+export class StellarWalletError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'StellarWalletError';
+  }
+}
+
+/**
+ * Check if Freighter wallet is installed
+ */
+export function isFreighterInstalled(): boolean {
+  if (typeof window === 'undefined') return false;
+  return (window as any).freighter !== undefined;
+}
+
+/**
+ * Verify wallet ownership by signing a message
+ * 
+ * @returns Object containing publicKey, message, and signature
+ * @throws StellarWalletError if wallet is not connected or verification fails
+ */
+export async function verifyWalletOwnership(): Promise<{
+  publicKey: string;
+  message: string;
+  signature: string;
+}> {
+  if (!stellarWallet.isConnected()) {
+    throw new StellarWalletError('Wallet not connected');
+  }
+
+  const wallet = stellarWallet.getWallet();
+  if (!wallet) {
+    throw new StellarWalletError('Wallet not connected');
+  }
+
+  // Create verification message with timestamp to prevent replay attacks
+  const timestamp = Date.now();
+  const message = `Verify ownership of Stellar wallet\nTimestamp: ${timestamp}`;
+
+  try {
+    // Sign the verification message using Freighter
+    const freighter = (window as any).freighter;
+    if (!freighter) {
+      throw new StellarWalletError('Freighter wallet not available');
+    }
+
+    const signedXdr = await freighter.signTransaction(
+      // Create a dummy transaction for signing (normally used for transactions)
+      // For message signing, we'll use the message directly
+      Buffer.from(message).toString('base64'),
+      {
+        network: wallet.network === 'mainnet' ? 'PUBLIC' : 'TESTNET',
+        networkPassphrase: wallet.network === 'mainnet'
+          ? 'Public Global Stellar Network ; September 2015'
+          : 'Test SDF Network ; September 2015',
+      }
+    );
+
+    return {
+      publicKey: wallet.publicKey,
+      message,
+      signature: signedXdr,
+    };
+  } catch (error) {
+    if (error instanceof StellarWalletError) {
+      throw error;
+    }
+    throw new StellarWalletError(
+      error instanceof Error ? error.message : 'Failed to sign wallet verification message'
+    );
+  }
+}
 export type { WalletInfo, WalletEventType };

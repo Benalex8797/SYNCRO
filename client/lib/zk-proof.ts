@@ -1,72 +1,39 @@
 /**
  * Client wrapper for ZK payment proof generation (Freighter / browser).
+ *
+ * Re-exports from the SDK — the canonical implementation lives in
+ * `@syncro/sdk/zk`. This file provides only the browser-specific
+ * `generateAndVerifyProof` convenience.
  */
+
 import {
-  createPaymentCommitment,
-  verifyPaymentCommitment,
-} from '@syncro/shared/crypto';
+  generatePaymentProof as sdkGeneratePaymentProof,
+  verifyPaymentProof as sdkVerifyPaymentProof,
+  generateAndVerifyProof as sdkGenerateAndVerifyProof,
+  type PaymentProofInput,
+  type PaymentProofResult,
+} from '../../sdk/src/zk/proof-generator.js';
 
-export interface PaymentProofInput {
-  userId: string;
-  serviceId: string;
-  amount: bigint;
-  timestamp: number;
-  blindingFactor?: string;
-  publicInputs?: Record<string, string>;
-}
+export type { PaymentProofInput, PaymentProofResult };
+export { type ProofBytes, type VerifyProofInput, type PaymentCommitment } from '../../sdk/src/zk/proof-generator.js';
 
-export interface PaymentProofResult {
-  proof: string;
-  commitment: ReturnType<typeof createPaymentCommitment>;
-  publicInputs: Record<string, string>;
-}
+/** @see {@link sdkGeneratePaymentProof} */
+export const generatePaymentProof = sdkGeneratePaymentProof;
 
-export async function generatePaymentProof(
-  input: PaymentProofInput,
-): Promise<PaymentProofResult> {
-  const commitment = createPaymentCommitment({
-    userId: input.userId,
-    serviceId: input.serviceId,
-    amount: input.amount,
-    timestamp: input.timestamp,
-  });
-
-  const publicInputs: Record<string, string> = {
-    commitment: commitment.commitment,
-    nullifier: commitment.nullifier,
-    version: String(commitment.version),
-    ...input.publicInputs,
-  };
-
-  const proof = btoa(
-    JSON.stringify({
-      commitment: commitment.commitment,
-      nullifier: commitment.nullifier,
-      blindingFactor: commitment.blindingFactor,
-      metadata: commitment.metadata,
-      publicInputs,
-    }),
-  );
-
-  return { proof, commitment, publicInputs };
-}
-
+/**
+ * Verify a payment proof locally (browser context).
+ * Accepts a simpler input shape than the SDK variant.
+ */
 export function verifyPaymentProof(input: {
   proof: string;
   amount: bigint;
 }): boolean {
-  try {
-    const decoded = JSON.parse(atob(input.proof));
-    return verifyPaymentCommitment(input.amount, decoded);
-  } catch {
-    return false;
-  }
+  return sdkVerifyPaymentProof({
+    proof: input.proof,
+    publicInputs: {},
+    amount: input.amount,
+  });
 }
 
-export async function generateAndVerifyProof(
-  input: PaymentProofInput,
-): Promise<PaymentProofResult & { verified: boolean }> {
-  const result = await generatePaymentProof(input);
-  const verified = verifyPaymentProof({ proof: result.proof, amount: input.amount });
-  return { ...result, verified };
-}
+/** @see {@link sdkGenerateAndVerifyProof} */
+export const generateAndVerifyProof = sdkGenerateAndVerifyProof;
