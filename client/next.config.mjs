@@ -2,6 +2,10 @@ import { withSentryConfig } from '@sentry/nextjs';
 
 /** @type {import('next').NextConfig} */
 const nextConfig = {
+  // Disable Next.js telemetry by default to avoid sending build/runtime usage data.
+  env: {
+    NEXT_TELEMETRY_DISABLED: '1',
+  },
   transpilePackages: ['@syncro/shared'],
   eslint: {
     ignoreDuringBuilds: true,
