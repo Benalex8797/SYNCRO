@@ -808,6 +808,25 @@ export function SubscriptionCard({
         <div className="flex-1">
           <div className="flex items-center gap-2">
             <h4 className={`font-semibold ${darkMode ? "text-white" : "text-gray-900"}`}>{sub.name}</h4>
+            <div
+              className="flex items-center gap-1 text-xs text-gray-500"
+              title={
+                sub.is_encrypted
+                  ? "This subscription's on-chain data is encrypted"
+                  : "This subscription is stored in plaintext on-chain"
+              }
+            >
+              {sub.is_encrypted ? (
+                <Lock className="w-3 h-3 text-green-500" aria-hidden="true" />
+              ) : (
+                <LockOpen className="w-3 h-3 text-yellow-500" aria-hidden="true" />
+              )}
+              <span className="sr-only">
+                {sub.is_encrypted
+                  ? "This subscription's on-chain data is encrypted"
+                  : "This subscription is stored in plaintext on-chain"}
+              </span>
+            </div>
             {sub.isTrial && (
               <StatusBadge status="trial" darkMode={darkMode} />
             )}

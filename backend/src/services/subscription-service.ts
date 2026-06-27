@@ -4,11 +4,13 @@ import { renewalCooldownService } from "./renewal-cooldown-service";
 import { analyticsService } from "./analytics-service";
 import { webhookService } from "./webhook-service";
 import { referralService } from "./referral-service";
+import { userPreferenceService } from "./user-preference-service";
 import logger from "../config/logger";
 import { DatabaseTransaction } from "../utils/transaction";
 import SERVICE_CATEGORIES from "./service-categories";
 import { validateCursor, encodeCursor } from "../utils/pagination";
 import { deriveStealthAddress } from "../../../shared/src/crypto/stealth-derive";
+import { encryptMetadata } from "../../../shared/src/crypto/metadata-encryption";
 import type {
   Subscription,
   SubscriptionCreateInput,
@@ -760,6 +762,10 @@ export class SubscriptionService {
       query = query.eq("category", options.category);
     }
 
+    if (options.encryptedOnly) {
+      query = query.eq("is_encrypted", true);
+    }
+
     if (validatedCursor) {
       query = query.lt("created_at", validatedCursor.createdAt);
     }
@@ -787,6 +793,104 @@ if (error) {
     };
   }
 
+  async getSubscriptionEncryptionSummary(userId: string): Promise<{
+    total: number;
+    encrypted: number;
+    unencrypted: number;
+  }> {
+    const { count: totalCount, error: totalError } = await supabase
+      .from("subscriptions")
+      .select("id", { head: true, count: "exact" })
+      .eq("user_id", userId);
+
+    if (totalError) {
+      throw new Error(`Failed to compute subscription summary: ${totalError.message}`);
+    }
+
+    const { count: encryptedCount, error: encryptedError } = await supabase
+      .from("subscriptions")
+      .select("id", { head: true, count: "exact" })
+      .eq("user_id", userId)
+      .eq("is_encrypted", true);
+
+    if (encryptedError) {
+      throw new Error(`Failed to compute encrypted subscription summary: ${encryptedError.message}`);
+    }
+
+    const total = totalCount ?? 0;
+    const encrypted = encryptedCount ?? 0;
+    return {
+      total,
+      encrypted,
+      unencrypted: Math.max(0, total - encrypted),
+    };
+  }
+
+  async encryptAllUnencryptedSubscriptions(userId: string, encryptionKey?: string): Promise<{ count: number }> {
+    const preferences = await userPreferenceService.getPreferences(userId);
+    const key = encryptionKey?.trim() || preferences.encryption_key;
+
+    if (!key) {
+      throw new Error("Encryption key is required to encrypt subscriptions");
+    }
+
+    const { data: subscriptions, error: fetchError } = await supabase
+      .from("subscriptions")
+      .select("id, name, price, category, renewal_url")
+      .eq("user_id", userId)
+      .eq("is_encrypted", false);
+
+    if (fetchError) {
+      throw new Error(`Failed to load subscriptions for encryption: ${fetchError.message}`);
+    }
+
+    if (!subscriptions || subscriptions.length === 0) {
+      return { count: 0 };
+    }
+
+    const updates = await Promise.all(
+      subscriptions.map(async (subscription: any) => {
+        const updated: Partial<Subscription> & Record<string, unknown> = {
+          is_encrypted: true,
+        };
+
+        if (typeof subscription.name === "string") {
+          updated.encrypted_name = JSON.stringify(await encryptMetadata(subscription.name, key));
+        }
+
+        if (typeof subscription.price === "number") {
+          updated.encrypted_price = JSON.stringify(await encryptMetadata(subscription.price.toString(), key));
+        }
+
+        if (typeof subscription.category === "string" && subscription.category.length > 0) {
+          updated.encrypted_category = JSON.stringify(await encryptMetadata(subscription.category, key));
+        }
+
+        if (typeof subscription.renewal_url === "string" && subscription.renewal_url.length > 0) {
+          updated.encrypted_renewal_url = JSON.stringify(await encryptMetadata(subscription.renewal_url, key));
+        }
+
+        return {
+          id: subscription.id,
+          update: updated,
+        };
+      }),
+    );
+
+    for (const { id, update } of updates) {
+      const { error: updateError } = await supabase
+        .from("subscriptions")
+        .update(update)
+        .eq("id", id)
+        .eq("user_id", userId);
+
+      if (updateError) {
+        throw new Error(`Failed to encrypt subscription ${id}: ${updateError.message}`);
+      }
+    }
+
+    return { count: updates.length };
+  }
 
   /**
    * Check if a renewal can be attempted based on cooldown period.

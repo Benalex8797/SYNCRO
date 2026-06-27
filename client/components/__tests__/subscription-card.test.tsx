@@ -98,6 +98,26 @@ describe('SubscriptionCard', () => {
       expect(screen.getByText('user@example.com')).toBeInTheDocument()
     })
 
+    test('displays encrypted lock indicator when subscription is encrypted', () => {
+      const encryptedSub = mockSubscription({
+        ...defaultProps.subscription,
+        is_encrypted: true,
+      })
+      render(<SubscriptionCard {...defaultProps} subscription={encryptedSub} />)
+
+      expect(screen.getByTitle(/encrypted on-chain data/i)).toBeInTheDocument()
+    })
+
+    test('displays plaintext lock indicator when subscription is not encrypted', () => {
+      const plaintextSub = mockSubscription({
+        ...defaultProps.subscription,
+        is_encrypted: false,
+      })
+      render(<SubscriptionCard {...defaultProps} subscription={plaintextSub} />)
+
+      expect(screen.getByTitle(/plaintext on-chain/i)).toBeInTheDocument()
+    })
+
     test('displays cancellation difficulty badge when guide is provided', () => {
       const guide = mockCancellationGuide({
         difficulty: 'hard',

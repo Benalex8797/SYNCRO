@@ -43,6 +43,7 @@ function transformSubscription(dbSub: any): any {
     lastUsedAt: dbSub.last_used_at,
     hasApiKey: dbSub.has_api_key || false,
     isTrial: dbSub.is_trial || false,
+    is_encrypted: dbSub.is_encrypted ?? false,
     trialEndsAt: dbSub.trial_ends_at,
     priceAfterTrial: dbSub.price_after_trial,
     source: dbSub.source || 'manual',

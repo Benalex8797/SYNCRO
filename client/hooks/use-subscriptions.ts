@@ -67,6 +67,7 @@ export function useSubscriptions({
           lastUsedAt: dbSub.last_used_at || dbSub.lastUsedAt,
           hasApiKey: dbSub.has_api_key || dbSub.hasApiKey || false,
           isTrial: dbSub.is_trial || dbSub.isTrial || false,
+          is_encrypted: dbSub.is_encrypted ?? false,
           trialEndsAt: dbSub.trial_ends_at || dbSub.trialEndsAt,
           priceAfterTrial: dbSub.price_after_trial || dbSub.priceAfterTrial,
           source: dbSub.source || "manual",
@@ -162,6 +163,7 @@ export function useSubscriptions({
         editedFields: [],
         pricingType: "fixed",
         billingCycle: "monthly",
+        is_encrypted: false,
         _optimistic: true,
       };
       const previous = subscriptions;
