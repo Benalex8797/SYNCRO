@@ -5,6 +5,7 @@ import {
   generateStealthMetaAddress,
   type StealthMetaAddress,
 } from '../../shared/src/types/stealth';
+import { StealthKeyConverter } from '../../shared/src/crypto/stealth-keys';
 import { isTorBrowser } from './tor-detection';
 
 type WalletInfo = {
