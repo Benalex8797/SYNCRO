@@ -190,17 +190,36 @@ app.get('/health/ready', async (req, res) => {
   }
 });
 
-// Legacy health endpoint (deprecated - use /health/live and /health/ready)
-app.get('/health', (req, res) => {
+// Full health endpoint with dependency status (used by smoke tests and blue-green pipeline)
+app.get('/health', async (req, res) => {
   if (isDraining()) {
     return res.status(503).json({
       status: 'draining',
       timestamp: new Date().toISOString(),
       message: 'Server is shutting down',
-      deprecated: true,
     });
   }
-  res.json({ status: 'ok', timestamp: new Date().toISOString(), deprecated: true });
+  try {
+    const readiness = await dependencyHealthService.getReadiness();
+    const liveness = dependencyHealthService.getLiveness();
+    const overallStatus = readiness.status === 'ready' ? 'ok' : 'degraded';
+    const httpStatus = readiness.status === 'ready' ? 200 : 503;
+    res.status(httpStatus).json({
+      status: overallStatus,
+      timestamp: new Date().toISOString(),
+      uptime_ms: liveness.uptime_ms,
+      version: process.env.npm_package_version || '1.0.0',
+      environment: process.env.NODE_ENV || 'development',
+      dependencies: readiness.dependencies,
+      message: readiness.message,
+    });
+  } catch (error) {
+    res.status(503).json({
+      status: 'error',
+      timestamp: new Date().toISOString(),
+      message: 'Health check failed',
+    });
+  }
 });
 
 // Swagger Documentation
