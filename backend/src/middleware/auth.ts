@@ -115,6 +115,7 @@ async function authenticateWithApiKey(
 
   req.user = {
     id: keyRecord.user_id,
+    role: 'user' as any,
     authMethod: 'api_key',
     scopes: Array.isArray(keyRecord.scopes) ? keyRecord.scopes : [],
     role: await roleService.getUserRole(keyRecord.user_id),
