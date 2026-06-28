@@ -1,6 +1,6 @@
 "use client"
 
-import { ArrowRight, Mail, Sparkles, Package } from "lucide-react"
+import { ArrowRight, Lock, LockOpen, Mail, Sparkles, Package } from "lucide-react"
 import { useState } from "react"
 import { TrialSection } from "./trial-section"
 import { formatCurrency, convertCurrency, type Currency } from "@/lib/currency-utils"
@@ -536,9 +536,30 @@ function SubscriptionCard({
             <h4 className={`font-semibold ${darkMode ? "text-white" : "text-[#1E2A35]"}`}>
               {sub.name}
             </h4>
-            <p className={`text-xs ${darkMode ? "text-gray-400" : "text-gray-500"}`}>
-              {sub.category}
-            </p>
+            <div className="flex items-center gap-2">
+              <p className={`text-xs ${darkMode ? "text-gray-400" : "text-gray-500"}`}>
+                {sub.category}
+              </p>
+              <div
+                className="flex items-center gap-1 text-xs text-gray-500"
+                title={
+                  sub.is_encrypted
+                    ? "This subscription's on-chain data is encrypted"
+                    : "This subscription is stored in plaintext on-chain"
+                }
+              >
+                {sub.is_encrypted ? (
+                  <Lock className="w-4 h-4 text-green-500" aria-hidden="true" />
+                ) : (
+                  <LockOpen className="w-4 h-4 text-yellow-500" aria-hidden="true" />
+                )}
+                <span className="sr-only">
+                  {sub.is_encrypted
+                    ? "This subscription's on-chain data is encrypted"
+                    : "This subscription is stored in plaintext on-chain"}
+                </span>
+              </div>
+            </div>
             {sub.email && (
               <div className="flex items-center gap-1 mt-1">
                 <Mail

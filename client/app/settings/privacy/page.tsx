@@ -110,7 +110,25 @@ async function updatePrivacyPreferences(updates: any): Promise<void> {
   });
   if (!res.ok) throw new Error('Failed to update privacy preferences');
 }
+async function fetchSubscriptionEncryptionSummary(): Promise<{ total: number; encrypted: number; unencrypted: number }> {
+  const res = await fetch(`${API_BASE}/api/subscriptions/encryption-summary`, {
+    credentials: 'include',
+  });
+  if (!res.ok) throw new Error('Failed to fetch subscription encryption summary');
+  const json = await res.json();
+  return json.data;
+}
 
+async function encryptAllSubscriptions(): Promise<{ encryptedCount: number }> {
+  const res = await fetch(`${API_BASE}/api/subscriptions/encrypt-all`, {
+    method: 'POST',
+    credentials: 'include',
+    headers: { 'Content-Type': 'application/json' },
+  });
+  if (!res.ok) throw new Error('Failed to encrypt subscriptions');
+  const json = await res.json();
+  return json.data;
+}
 // ─── Component ────────────────────────────────────────────────────────────────
 
 export default function DataPrivacyPage() {
@@ -159,6 +177,14 @@ export default function DataPrivacyPage() {
   });
   const [privacyLoading, setPrivacyLoading] = useState(false);
   const [privacyError, setPrivacyError] = useState<string | null>(null);
+  const [encryptionSummary, setEncryptionSummary] = useState<{
+    total: number;
+    encrypted: number;
+    unencrypted: number;
+  } | null>(null);
+  const [encryptionLoading, setEncryptionLoading] = useState(false);
+  const [encryptionError, setEncryptionError] = useState<string | null>(null);
+  const [encryptionMessage, setEncryptionMessage] = useState<string | null>(null);
 
   // ── Cleanup on unmount ────────────────────────────────────────────────────
   useEffect(() => {
@@ -198,6 +224,18 @@ export default function DataPrivacyPage() {
         }
       })
       .catch(err => console.error('Failed to load privacy preferences:', err));
+
+    fetchSubscriptionEncryptionSummary()
+      .then(summary => {
+        if (!cancelled) {
+          setEncryptionSummary(summary);
+        }
+      })
+      .catch(err => {
+        if (!cancelled) {
+          setEncryptionError(err instanceof Error ? err.message : 'Failed to load encryption summary');
+        }
+      });
 
     return () => {
       cancelled = true;
@@ -311,7 +349,7 @@ export default function DataPrivacyPage() {
           }));
         } else {
           // still pending
-          setExportJob((prev) => ({ ...prev, lastChecked: now });
+          setExportJob((prev) => ({ ...prev, lastChecked: now }));
         }
       } catch (err) {
         stopPolling();
@@ -466,6 +504,11 @@ export default function DataPrivacyPage() {
                 />
                 <span className="text-sm font-medium text-gray-700">Enable Privacy Mode</span>
               </label>
+              {encryptionSummary && (
+                <p className="text-sm text-gray-500 mt-2">
+                  {encryptionSummary.encrypted} of {encryptionSummary.total} subscriptions encrypted.
+                </p>
+              )}
               </div>
               {settings.encryptionKey && (
                 <div className="text-right">
@@ -475,6 +518,47 @@ export default function DataPrivacyPage() {
                   </p>
                 </div>
               )}
+            </div>
+            <div className="mt-4 flex flex-col gap-3">
+              {encryptionMessage && (
+                <div className="rounded-lg bg-green-50 border border-green-200 p-3 text-sm text-green-700">
+                  {encryptionMessage}
+                </div>
+              )}
+              {encryptionError && (
+                <div className="rounded-lg bg-red-50 border border-red-200 p-3 text-sm text-red-700">
+                  {encryptionError}
+                </div>
+              )}
+              <button
+                type="button"
+                onClick={async () => {
+                  setEncryptionError(null);
+                  setEncryptionMessage(null);
+                  setEncryptionLoading(true);
+                  try {
+                    const data = await encryptAllSubscriptions();
+                    setEncryptionMessage(`Encrypted ${data.encryptedCount} subscription${data.encryptedCount === 1 ? '' : 's'}.`);
+                    setEncryptionSummary((prev) =>
+                      prev
+                        ? {
+                            ...prev,
+                            encrypted: prev.encrypted + data.encryptedCount,
+                            unencrypted: Math.max(0, prev.unencrypted - data.encryptedCount),
+                          }
+                        : null,
+                    );
+                  } catch (err) {
+                    setEncryptionError(err instanceof Error ? err.message : 'Failed to encrypt subscriptions');
+                  } finally {
+                    setEncryptionLoading(false);
+                  }
+                }}
+                disabled={encryptionLoading || encryptionSummary?.unencrypted === 0}
+                className="w-full inline-flex items-center justify-center rounded-lg bg-indigo-600 px-4 py-2 text-sm font-medium text-white hover:bg-indigo-700 disabled:opacity-50"
+              >
+                {encryptionLoading ? 'Encrypting…' : 'Encrypt all unencrypted subscriptions'}
+              </button>
             </div>
           </section>
 
@@ -711,7 +795,6 @@ export default function DataPrivacyPage() {
               Delete Account
             </button>
           </section>
-        </div>
 
         {/* Footer links */}
         <p className="text-center text-xs text-gray-400 mt-8">
