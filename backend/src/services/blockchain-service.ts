@@ -1,6 +1,7 @@
 import logger from "../config/logger";
 import { supabase } from "../config/database";
 import { NotificationPayload } from "../types/reminder";
+import { getRequestId } from "../middleware/requestContext";
 import crypto from 'crypto';
 import {
   Contract,
@@ -169,6 +170,7 @@ export class BlockchainService {
       price: payload.subscription.price,
       billingCycle: payload.subscription.billing_cycle,
       deliveryChannels,
+      correlationId: getRequestId(),
       timestamp: new Date().toISOString(),
     };
 
@@ -335,6 +337,7 @@ export class BlockchainService {
       price: subscriptionData.price,
       billingCycle: subscriptionData.billing_cycle,
       status: subscriptionData.status,
+      correlationId: getRequestId(),
       timestamp: new Date().toISOString(),
     };
 
@@ -492,6 +495,7 @@ export class BlockchainService {
       giftCardHash,
       provider,
       eventType: 'gift_card_attached',
+      correlationId: getRequestId(),
       timestamp: new Date().toISOString(),
     };
 
@@ -851,11 +855,12 @@ export class BlockchainService {
   }
 
   private async enqueueDeadLetter<T>(payload: DLQPayload<T>): Promise<void> {
+    const correlationId = getRequestId();
     const dlqKey = "dlq:blockchain_tx";
     try {
       if (this.redisClient) {
-        await this.redisClient.lPush(dlqKey, JSON.stringify(payload));
-        logger.error("Enqueued to DLQ (Redis) for blockchain tx", { dlqKey });
+        await this.redisClient.lPush(dlqKey, JSON.stringify({ ...payload, correlationId }));
+        logger.error("Enqueued to DLQ (Redis) for blockchain tx", { dlqKey, correlationId });
         return;
       }
     } catch (err) {
@@ -867,10 +872,10 @@ export class BlockchainService {
       await supabase.from("blockchain_logs").insert({
         user_id: "system",
         event_type: "blockchain_dead_letter",
-        event_data: payload,
+        event_data: { ...payload, correlationId },
         status: "dead_letter",
       });
-      logger.error("Recorded blockchain dead letter in database");
+      logger.error("Recorded blockchain dead letter in database", { correlationId });
     } catch (dbErr) {
       logger.error("Failed to record dead letter in database:", dbErr);
     }
@@ -908,7 +913,7 @@ export class BlockchainService {
         .insert({
           user_id: userId,
           event_type: "subscription_encrypted_store",
-          event_data: { subscriptionId, encryptedBlob, timestamp: new Date().toISOString() },
+          event_data: { subscriptionId, encryptedBlob, correlationId: getRequestId(), timestamp: new Date().toISOString() },
           status: "pending",
         })
         .select()
