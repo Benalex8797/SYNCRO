@@ -1,14 +1,16 @@
-import cron from 'node-cron';
+import cron, { type ScheduledTask } from 'node-cron';
 import logger from '../config/logger';
 import { runWithCorrelationId } from '../middleware/requestContext';
 import { settlementBatcher } from '../services/settlement-batcher';
+
+let settlementBatchTask: ScheduledTask | null = null;
 
 /**
  * Periodically flush pending settlements into batched on-chain submissions.
  * Runs every 2 minutes; max wait time is enforced inside SettlementBatcher.
  */
 export function startSettlementBatchJob(): void {
-  cron.schedule('*/2 * * * *', () =>
+  settlementBatchTask = cron.schedule('*/2 * * * *', () =>
     runWithCorrelationId('cron:settlement-batch', async (cid) => {
       try {
         const result = await settlementBatcher.processPending();
@@ -25,4 +27,12 @@ export function startSettlementBatchJob(): void {
     }),
   );
   logger.info('Settlement batch cron job scheduled (every 2 minutes)');
+}
+
+export function stopSettlementBatchJob(): void {
+  if (settlementBatchTask) {
+    settlementBatchTask.stop();
+    settlementBatchTask = null;
+    logger.info('Settlement batch cron job stopped');
+  }
 }

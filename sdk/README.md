@@ -673,6 +673,106 @@ try {
 }
 ```
 
+## Receiving Webhooks
+
+SYNCRO delivers webhook events as JSON envelopes signed with HMAC-SHA256. Use the SDK helpers to verify signatures and handle events in a type-safe way.
+
+```typescript
+import {
+  verifyWebhookSignature,
+  parseWebhookHeaders,
+  createWebhookHandler,
+  SYNCRO_WEBHOOK_HEADERS,
+} from "@syncro/sdk/webhooks";
+import type { SyncroWebhookEvent } from "@syncro/sdk";
+
+// Express-style example
+app.post("/webhooks/syncro", express.raw({ type: "application/json" }), async (req, res) => {
+  const rawBody = req.body.toString("utf8");
+  const headers = parseWebhookHeaders(req.headers);
+  const secret = process.env.SYNCRO_WEBHOOK_SECRET!;
+
+  if (!headers.signature || !verifyWebhookSignature(rawBody, headers.signature, secret)) {
+    return res.status(401).send("Invalid signature");
+  }
+
+  const event = JSON.parse(rawBody) as SyncroWebhookEvent;
+  switch (event.type) {
+    case "subscription.renewed":
+      await handleRenewal(event.data);
+      break;
+    case "subscription.renewal_failed":
+      await handleRenewalFailure(event.data);
+      break;
+    default:
+      break;
+  }
+
+  res.status(200).send("OK");
+});
+
+// Or use the bundled handler factory
+const handleSyncroWebhook = createWebhookHandler(process.env.SYNCRO_WEBHOOK_SECRET!, {
+  "subscription.renewed": async (event) => {
+    console.log("Renewed:", event.data.subscription_name);
+  },
+});
+```
+
+### Delivery headers
+
+| Header | Constant | Purpose |
+|--------|----------|---------|
+| `X-Syncro-Signature` | `SYNCRO_WEBHOOK_HEADERS.signature` | HMAC-SHA256 hex digest of the raw JSON body |
+| `X-Syncro-Delivery-Id` | `SYNCRO_WEBHOOK_HEADERS.deliveryId` | Unique delivery identifier |
+| `X-Syncro-Retry-Count` | `SYNCRO_WEBHOOK_HEADERS.retryCount` | Retry attempt number for redeliveries |
+| `X-Syncro-Replay-Id` | `SYNCRO_WEBHOOK_HEADERS.replayId` | Identifier when replaying from dead-letter queue |
+
+Always verify signatures against the **raw request body** string. Re-serializing parsed JSON can invalidate the signature.
+
+## Stellar Transaction Memos
+
+SYNCRO uses a compact, standardized memo format for Stellar transactions to support cross-platform receipt verification.
+
+**Format:** `S1:<type>:<subscriptionIdHash>`
+
+| Type code | Operation |
+|-----------|-----------|
+| `c` | subscription create |
+| `u` | subscription update |
+| `d` | subscription delete |
+| `x` | subscription cancel |
+| `p` | subscription pause |
+| `r` | subscription unpause |
+| `m` | reminder log |
+| `g` | gift card attached |
+| `k` | commitment record |
+
+`subscriptionIdHash` is the first 12 hex characters of `SHA-256(subscriptionId)`.
+
+```typescript
+import {
+  buildSyncroMemo,
+  parseSyncroMemo,
+  validateSyncroMemo,
+  verifyTransactionMemo,
+} from "@syncro/sdk/stellar";
+
+const memo = buildSyncroMemo("create", subscriptionId);
+// => "S1:c:a1b2c3d4e5f6"
+
+const parsed = parseSyncroMemo(memo);
+const isValid = validateSyncroMemo(memo, "create", subscriptionId);
+
+const receiptOk = verifyTransactionMemo(
+  { memo, successful: true, hash: txHash },
+  "create",
+  subscriptionId,
+);
+```
+
+Legacy memos that do not match the `S1:` format are treated as backward-compatible/unparsed.
+
 ## TypeScript Support
 
 Full TypeScript support with exported types:

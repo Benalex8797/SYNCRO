@@ -32,6 +32,11 @@
       "types": "./src/crypto/index.ts",
       "import": "./src/crypto/index.ts",
       "require": "./dist/crypto/index.js"
+    },
+    "./stellar/memo": {
+      "types": "./src/stellar/memo.ts",
+      "import": "./src/stellar/memo.ts",
+      "require": "./dist/stellar/memo.js"
     }
   },
   "scripts": {
