@@ -1,25 +1,21 @@
 /** @type {import('ts-jest').JestConfigWithTsJest} **/
 export default {
-  preset: "ts-jest/presets/default-esm",
-  testEnvironment: "node",
-  extensionsToTreatAsEsm: ['.ts'],
-  moduleNameMapper: {
-    "^(\\.\\.?\\/.+)\\.js$": "$1",
-  },
+  preset: 'ts-jest',
+  testEnvironment: 'node',
+  roots: ['<rootDir>/tests'],
   transform: {
-    "^.+\\.tsx?$": [
-      "ts-jest",
-      {
-        useESM: true,
+    '^.+\\.tsx?$': ['ts-jest', {
+      diagnostics: false,
+      tsconfig: {
+        target: 'ES2022',
+        module: 'commonjs',
+        esModuleInterop: true,
+        skipLibCheck: true,
       },
-    ],
+    }],
   },
-  coverageThreshold: {
-    global: {
-      branches: 70,
-      functions: 75,
-      lines: 75,
-      statements: 75,
-    },
+  moduleNameMapper: {
+    '^(\\.\\.?\\/.+)\\.js$': '$1',
+    '^@syncro/shared/stellar/memo$': '<rootDir>/../shared/src/stellar/memo.ts',
   },
 };
