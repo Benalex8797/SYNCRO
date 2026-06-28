@@ -14,7 +14,7 @@ import {
   Bell,
   Gift,
 } from "lucide-react"
-import { useState } from "react"
+import { useState, useEffect, useRef, useCallback } from "react"
 import NotificationPreferencesModal from "@/components/modals/notification-preferences-modal"
 import { NotesEditor } from "@/components/ui/notes-editor"
 import { TagInput } from "@/components/ui/tag-input"
@@ -69,6 +69,54 @@ export default function ManageSubscriptionModal({
   const { tags, addTagToSubscription, removeTagFromSubscription, createTag, saveNotes } = useTags()
   const [assignedTagIds, setAssignedTagIds] = useState<string[]>(
     subscription.custom_tag_ids ?? [],
+  )
+
+  // ── Focus trap & Escape key (Issue #956) ──────────────────────────────────
+  const dialogRef = useRef<HTMLDivElement>(null)
+  const closeButtonRef = useRef<HTMLButtonElement>(null)
+
+  /** Focus the close button as the initial focus target when the dialog mounts. */
+  useEffect(() => {
+    closeButtonRef.current?.focus()
+  }, [])
+
+  /** Trap focus within the dialog and handle Escape to close. */
+  const handleDialogKeyDown = useCallback(
+    (e: React.KeyboardEvent<HTMLDivElement>) => {
+      if (e.key === "Escape") {
+        e.preventDefault()
+        onClose()
+        return
+      }
+      if (e.key !== "Tab") return
+
+      const dialog = dialogRef.current
+      if (!dialog) return
+
+      const focusableSelectors =
+        'a[href], button:not([disabled]), textarea:not([disabled]), input:not([disabled]), select:not([disabled]), [tabindex]:not([tabindex="-1"])'
+      const focusable = Array.from(
+        dialog.querySelectorAll<HTMLElement>(focusableSelectors),
+      ).filter((el) => !el.closest("[aria-hidden='true']"))
+
+      if (focusable.length === 0) return
+
+      const first = focusable[0]
+      const last = focusable[focusable.length - 1]
+
+      if (e.shiftKey) {
+        if (document.activeElement === first) {
+          e.preventDefault()
+          last.focus()
+        }
+      } else {
+        if (document.activeElement === last) {
+          e.preventDefault()
+          first.focus()
+        }
+      }
+    },
+    [onClose],
   )
 
   const handleAddTag = async (tagId: string) => {
@@ -126,10 +174,12 @@ export default function ManageSubscriptionModal({
     <>
       <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-50 flex items-center justify-center p-4">
         <div
+          ref={dialogRef}
           role="dialog"
           aria-labelledby="manage-modal-title"
           aria-describedby="manage-modal-desc"
           aria-modal="true"
+          onKeyDown={handleDialogKeyDown}
           className={`${
             darkMode
               ? "bg-[#2D3748] text-[#F9F6F2]"
@@ -157,6 +207,7 @@ export default function ManageSubscriptionModal({
                   />
                 </button>
                 <button
+                  ref={closeButtonRef}
                   onClick={onClose}
                   aria-label="Close manage subscription dialog"
                   className="p-2 hover:bg-white/10 rounded-lg transition-colors"
