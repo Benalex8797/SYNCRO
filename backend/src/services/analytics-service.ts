@@ -11,12 +11,18 @@ import {
 } from '@syncro/shared/subscription-math';
 import { AnalyticsSummary, MonthlySpend, CategorySpend, SubscriptionSpend, Budget } from '../types/analytics';
 import { Subscription } from '../types/reminder';
+import { queryCacheService } from './query-cache-service';
 
 export class AnalyticsService {
   /**
    * Get analytics summary for a user
    */
   async getSummary(userId: string): Promise<AnalyticsSummary> {
+    const cached = await queryCacheService.get<AnalyticsSummary>(userId, 'analytics_summary', { type: 'summary' });
+    if (cached) {
+      return cached;
+    }
+
     try {
       // 1. Fetch active subscriptions
       const { data: subscriptions, error: subError } = await supabase
@@ -53,7 +59,7 @@ export class AnalyticsService {
 
       const upcomingRenewalsCount = countUpcomingRenewals(typedSubs, 7);
 
-      return {
+      const summary = {
         total_monthly_spend: totalMonthlySpend,
         active_subscriptions: typedSubs.length,
         upcoming_renewals_count: upcomingRenewalsCount,
@@ -62,6 +68,16 @@ export class AnalyticsService {
         top_subscriptions: topSubscriptions,
         budget_status: budgetStatus
       };
+
+      await queryCacheService.set(
+        userId,
+        'analytics_summary',
+        { type: 'summary' },
+        summary,
+        queryCacheService.getDefaultAnalyticsTtl(),
+      );
+
+      return summary;
     } catch (error) {
       logger.error('Error fetching analytics summary:', error);
       throw error;
@@ -128,6 +144,8 @@ export class AnalyticsService {
       logger.error('Error upserting budget:', error);
       throw error;
     }
+
+    await queryCacheService.invalidateUserNamespace(userId, 'analytics_summary');
 
     return data;
   }

@@ -18,6 +18,7 @@ import type {
   ListSubscriptionsOptions,
   ListSubscriptionsResult,
 } from "../types/subscription";
+import { queryCacheService } from "./query-cache-service";
 
 export interface BlockchainSyncResult {
   success: boolean;
@@ -39,7 +40,7 @@ export class SubscriptionService {
     userId: string,
     input: SubscriptionCreateInput,
   ): Promise<SubscriptionSyncResult> {
-    return await DatabaseTransaction.execute(async (client) => {
+    const result = await DatabaseTransaction.execute(async (client) => {
       try {
         // Determine the next stealth derivation index for this user
         const { data: indexRow } = await client
@@ -157,6 +158,9 @@ export class SubscriptionService {
         throw error;
       }
     });
+
+    await this.invalidateSubscriptionCache(userId);
+    return result;
   }
 
   /**
@@ -167,7 +171,7 @@ export class SubscriptionService {
     userId: string,
     subscriptionId: string,
   ): Promise<SubscriptionSyncResult> {
-    return await DatabaseTransaction.execute(async (client) => {
+    const result = await DatabaseTransaction.execute(async (client) => {
       try {
         // 1. Verify ownership and get subscription details
         const { data: existing, error: fetchError } = await client
@@ -259,6 +263,9 @@ export class SubscriptionService {
         throw error;
       }
     });
+
+    await this.invalidateSubscriptionCache(userId);
+    return result;
   }
 
   async cancelSubscription(
@@ -631,7 +638,7 @@ export class SubscriptionService {
     input: SubscriptionUpdateInput,
     expectedVersion?: number,
   ): Promise<SubscriptionSyncResult> {
-    return await DatabaseTransaction.execute(async (client) => {
+    const result = await DatabaseTransaction.execute(async (client) => {
       try {
         // 1. Fetch and verify ownership
         const { data: existing, error: fetchError } = await client
@@ -713,12 +720,21 @@ export class SubscriptionService {
         throw error;
       }
     });
+
+    await this.invalidateSubscriptionCache(userId);
+    return result;
   }
 
   /**
    * Get subscription by ID (with ownership check)
    */
   async getSubscription(userId: string, subscriptionId: string): Promise<Subscription> {
+    const cacheKey = { subscriptionId };
+    const cached = await queryCacheService.get<Subscription>(userId, 'subscription_detail', cacheKey);
+    if (cached) {
+      return cached;
+    }
+
     const { data: subscription, error } = await supabase
       .from("subscriptions")
       .select("*")
@@ -730,6 +746,14 @@ export class SubscriptionService {
       throw new Error("Subscription not found or access denied");
     }
 
+    await queryCacheService.set(
+      userId,
+      'subscription_detail',
+      cacheKey,
+      subscription,
+      queryCacheService.getDefaultSubscriptionListTtl(),
+    );
+
     return subscription;
   }
 
@@ -740,6 +764,16 @@ export class SubscriptionService {
     userId: string,
     options: ListSubscriptionsOptions = {},
   ): Promise<ListSubscriptionsResult> {
+    const cachePayload = { ...options };
+    const cached = await queryCacheService.get<ListSubscriptionsResult>(
+      userId,
+      'subscription_list',
+      cachePayload,
+    );
+    if (cached) {
+      return cached;
+    }
+
     const limit = Math.min(options.limit ?? 20, 100);
 
     const validatedCursor = validateCursor(options.cursor);
@@ -785,12 +819,30 @@ if (error) {
         ? encodeCursor({ createdAt: subscriptions[subscriptions.length - 1].created_at })
         : null;
 
-    return {
+    const result = {
       subscriptions,
       total: count ?? 0,
       hasMore,
       nextCursor,
     };
+
+    await queryCacheService.set(
+      userId,
+      'subscription_list',
+      cachePayload,
+      result,
+      queryCacheService.getDefaultSubscriptionListTtl(),
+    );
+
+    return result;
+  }
+
+  private async invalidateSubscriptionCache(userId: string): Promise<void> {
+    await Promise.all([
+      queryCacheService.invalidateUserNamespace(userId, 'subscription_list'),
+      queryCacheService.invalidateUserNamespace(userId, 'subscription_detail'),
+      queryCacheService.invalidateUserNamespace(userId, 'analytics_summary'),
+    ]);
   }
 
   async getSubscriptionEncryptionSummary(userId: string): Promise<{

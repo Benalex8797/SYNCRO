@@ -348,6 +348,30 @@ export class RenewalExecutor {
 
     logger.info('Renewal executed successfully', { subscriptionId, transactionHash });
 
+    // Telegram payment confirmation (non-blocking)
+    try {
+      const { telegramNotificationService } = await import('./telegram-notification-service');
+      const { data: sub } = await supabase
+        .from('subscriptions')
+        .select('name, price, currency, billing_cycle')
+        .eq('id', subscriptionId)
+        .single();
+
+      if (sub) {
+        telegramNotificationService
+          .sendPaymentConfirmation(userId, {
+            subscriptionName: sub.name,
+            amount: sub.price,
+            currency: sub.currency,
+            billingCycle: sub.billing_cycle,
+            transactionHash,
+          })
+          .catch((err) => logger.warn('Telegram payment confirmation failed', { err }));
+      }
+    } catch {
+      // non-blocking
+    }
+
     // Dispatch webhook event
     try {
       webhookService.dispatchEvent(userId, 'subscription.renewed', {

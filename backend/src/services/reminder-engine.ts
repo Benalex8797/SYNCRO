@@ -15,6 +15,7 @@ import { subDays } from 'date-fns';
 import { calculateBackoffDelay } from '../utils/retry';
 import { userPreferenceService } from './user-preference-service';
 import { notificationPreferenceService } from './notification-preference-service';
+import { telegramBotService } from './telegram-bot-service';
 
 export interface ReminderEngineOptions {
   defaultDaysBefore?: number[];
@@ -393,6 +394,30 @@ export class ReminderEngine {
       );
     }
 
+    if (deliveryChannels.includes('telegram') && userPreferences.email_opt_ins.reminders) {
+      const subPrefs = await this.getNotificationPreferences(reminder.subscription_id, reminder.user_id);
+      if (!subPrefs.muted && subPrefs.channels.includes('telegram')) {
+        const telegramDelivery = await this.createDeliveryRecord(reminder.id, reminder.user_id, 'telegram');
+        deliveries.push(telegramDelivery);
+
+        const telegramResult = await telegramBotService.sendRenewalReminder(reminder.user_id, payload, undefined, {
+          maxAttempts: this.maxRetryAttempts,
+        });
+        const telegramStatus: DeliveryStatus = telegramResult.success
+          ? 'sent'
+          : (telegramResult.metadata?.retryable ? 'retrying' : 'failed');
+
+        telegramDelivery.status = telegramStatus;
+
+        await this.updateDeliveryRecord(
+          telegramDelivery.id,
+          telegramStatus,
+          telegramResult.error,
+          telegramResult.metadata,
+        );
+      }
+    }
+
     await blockchainService.logReminderEvent(reminder.user_id, payload, deliveryChannels);
 
     const hasDeliveryProgress = deliveries.some((delivery) =>
@@ -470,6 +495,10 @@ export class ReminderEngine {
       }
     } else if (delivery.channel === 'slack') {
       result = await slackService.sendReminderNotification(payload, {
+        maxAttempts: 1,
+      });
+    } else if (delivery.channel === 'telegram') {
+      result = await telegramBotService.sendRenewalReminder(delivery.user_id, payload, undefined, {
         maxAttempts: 1,
       });
     }

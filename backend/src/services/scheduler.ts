@@ -13,6 +13,7 @@ import { idempotencyService } from './idempotency';
 import { subscriptionService } from './subscription-service';
 import { jobAlertService } from './job-alert-service';
 import { agentWalletRotationService } from './agent-wallet-rotation';
+import { telegramNotificationService } from './telegram-notification-service';
 
 export class SchedulerService {
   private jobs: cron.ScheduledTask[] = [];
@@ -128,6 +129,20 @@ export class SchedulerService {
           );
         } catch (error) {
           logger.error('Error in scheduled webhook retry processing:', error);
+        }
+      }),
+    );
+
+    // ── Weekly on Monday at 9 AM UTC: Telegram spending summaries ────────
+    this.jobs.push(
+      cron.schedule('0 9 * * 1', async () => {
+        logger.info('Running weekly Telegram spending summaries');
+        try {
+          await jobAlertService.runMonitoredJob('telegram-weekly-summary', () =>
+            telegramNotificationService.sendWeeklySummariesToAllUsers(),
+          );
+        } catch (error) {
+          logger.error('Error in weekly Telegram summary job:', error);
         }
       }),
     );
