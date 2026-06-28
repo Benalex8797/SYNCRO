@@ -2,7 +2,12 @@
 
 import { useEffect, useState } from 'react';
 import Link from 'next/link';
-import { getChannels, PaymentChannel } from '@/lib/payment-channel';
+import {
+  getChannels,
+  getChannelPreferences,
+  updateChannelPreferences,
+  PaymentChannel,
+} from '@/lib/payment-channel';
 import { ChannelCard } from '@/components/channels/ChannelCard';
 import { ChannelDetail } from '@/components/channels/ChannelDetail';
 import { OpenChannelModal } from '@/components/channels/OpenChannelModal';
@@ -13,6 +18,8 @@ export default function ChannelsPage() {
   const [selectedChannel, setSelectedChannel] = useState<PaymentChannel | null>(null);
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [isLoading, setIsLoading] = useState(true);
+  const [autoTopUp, setAutoTopUp] = useState(false);
+  const [savingPrefs, setSavingPrefs] = useState(false);
 
   const loadChannels = async () => {
     try {
@@ -27,10 +34,24 @@ export default function ChannelsPage() {
 
   useEffect(() => {
     loadChannels();
-    // Poll for updates every 10 seconds
+    getChannelPreferences()
+      .then((prefs) => setAutoTopUp(prefs.autoTopUp))
+      .catch(() => undefined);
     const interval = setInterval(loadChannels, 10000);
     return () => clearInterval(interval);
   }, []);
+
+  const handleAutoTopUpToggle = async (enabled: boolean) => {
+    setSavingPrefs(true);
+    try {
+      const prefs = await updateChannelPreferences({ autoTopUp: enabled });
+      setAutoTopUp(prefs.autoTopUp);
+    } catch (err) {
+      console.error(err);
+    } finally {
+      setSavingPrefs(false);
+    }
+  };
 
   const handleChannelOpened = (channel: PaymentChannel) => {
     setChannels((prev) => [...prev, channel]);
@@ -62,6 +83,25 @@ export default function ChannelsPage() {
             <p className="text-sm text-gray-500">Open, monitor, and manage your payment channels.</p>
           </div>
           <Button onClick={() => setIsModalOpen(true)}>Open Channel</Button>
+        </div>
+
+        <div className="mb-6 flex items-center justify-between rounded-lg border border-gray-200 bg-white px-4 py-3">
+          <div>
+            <p className="text-sm font-medium text-gray-900">Auto top-up</p>
+            <p className="text-xs text-gray-500">
+              Automatically deposit funds when channel balance is low (requires pre-authorization).
+            </p>
+          </div>
+          <label className="inline-flex items-center gap-2 cursor-pointer">
+            <input
+              type="checkbox"
+              checked={autoTopUp}
+              disabled={savingPrefs}
+              onChange={(e) => handleAutoTopUpToggle(e.target.checked)}
+              className="h-4 w-4 rounded border-gray-300 text-indigo-600 focus:ring-indigo-500"
+            />
+            <span className="text-sm text-gray-700">{autoTopUp ? 'On' : 'Off'}</span>
+          </label>
         </div>
 
         {(hasLowBalance || hasExpiring) && (
