@@ -4,6 +4,7 @@ import { NotificationPayload } from "../types/reminder";
 import {
   Contract,
   Keypair,
+  Memo,
   Networks,
   TransactionBuilder,
   xdr,
@@ -22,6 +23,11 @@ import {
   resolveSubscriptionMethod,
 } from "../blockchain/backend-contract-bindings";
 import { commitmentStorageService } from "./commitment-storage-service";
+import {
+  buildSyncroMemo,
+  resolveMemoOperationFromMethod,
+  verifyTransactionMemo,
+} from "@syncro/shared/stellar/memo";
 
 export type PayloadVersion = '1.0';
 
@@ -269,6 +275,7 @@ export class BlockchainService {
     return this.invokeContractWithRetry(
       BLOCKCHAIN_INVOKE_METHODS.logReminder,
       this.encodeReminderArgs(eventData),
+      eventData.subscriptionId,
     );
   }
 
@@ -425,7 +432,11 @@ export class BlockchainService {
     eventData: SubscriptionEventPayload,
   ): Promise<{ transactionHash: string }> {
     const method = resolveSubscriptionMethod(operation);
-    return this.invokeContractWithRetry(method, this.encodeSubscriptionArgs(eventData));
+    return this.invokeContractWithRetry(
+      method,
+      this.encodeSubscriptionArgs(eventData),
+      eventData.subscriptionId,
+    );
   }
 
   /**
@@ -527,6 +538,7 @@ export class BlockchainService {
     return this.invokeContractWithRetry(
       BLOCKCHAIN_INVOKE_METHODS.giftCardAttached,
       this.encodeGiftCardArgs(eventData),
+      eventData.subscriptionId,
     );
   }
 
@@ -536,6 +548,7 @@ export class BlockchainService {
   private async invokeContractWithRetry(
     method: string,
     args: xdr.ScVal[],
+    subscriptionId?: string,
   ): Promise<{ transactionHash: string }> {
     if (!this.contractAddress) {
       throw new Error("SOROBAN_CONTRACT_ADDRESS not configured");
@@ -577,16 +590,27 @@ export class BlockchainService {
     let lastErr: unknown = null;
     const { maxAttempts = 3, initialDelay = 500, multiplier = 2 } = this.policy.retryPolicy;
 
+    const memoOperation = subscriptionId ? resolveMemoOperationFromMethod(method) : null;
+    const expectedMemo =
+      subscriptionId && memoOperation
+        ? buildSyncroMemo(memoOperation, subscriptionId)
+        : null;
+
     for (let attempt = 0; attempt < maxAttempts; attempt++) {
       try {
         const account = await rpc.getAccount(sourceKeypair.publicKey());
-        const tx = new TransactionBuilder(account, {
+        let builder = new TransactionBuilder(account, {
           fee: "100",
           networkPassphrase: this.networkPassphrase,
         })
           .addOperation(contract.call(method, ...args))
-          .setTimeout(Math.floor(this.policy.timeoutMs / 1000))
-          .build();
+          .setTimeout(Math.floor(this.policy.timeoutMs / 1000));
+
+        if (expectedMemo) {
+          builder = builder.addMemo(Memo.text(expectedMemo));
+        }
+
+        const tx = builder.build();
 
         const sim = await rpc.simulateTransaction(tx);
         if (SorobanRpc.Api.isSimulationError(sim)) {
@@ -606,6 +630,18 @@ export class BlockchainService {
         if (getTx.status === "NOT_FOUND") {
           // brief wait+retry fetch
           await this.sleep(initialDelay);
+        } else if (
+          expectedMemo &&
+          subscriptionId &&
+          memoOperation &&
+          getTx.status === "SUCCESS" &&
+          !verifyTransactionMemo(
+            { memo: expectedMemo, successful: true, hash: send.hash },
+            memoOperation,
+            subscriptionId,
+          )
+        ) {
+          throw new Error(`Transaction memo verification failed for method ${method}`);
         }
 
         return { transactionHash: send.hash };
