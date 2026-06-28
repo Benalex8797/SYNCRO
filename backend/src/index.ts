@@ -50,6 +50,8 @@ import privacyRoutes from './routes/privacy';
 import emailRescanRoutes from './routes/email-rescan';
 import gmailRouter from './routes/integrations/gmail'
 import outlookRouter from './routes/integrations/outlook'
+import yahooRouter from './routes/integrations/yahoo'
+import icloudRouter from './routes/integrations/icloud'
 import slackRouter from './routes/integrations/slack'
 import cspViolationsRoutes from './routes/csp-violations'
 import { createExchangeRatesRouter } from './routes/exchange-rates';
@@ -177,8 +179,10 @@ app.use('/api/simulation', simulationRoutes);
 app.use('/api/merchants', merchantRoutes);
 app.use('/api/team', teamRoutes);
 app.use('/api/audit', auditRoutes);
-app.use('/api/integrations/gmail', authenticate, gmailRouter);
-app.use('/api/integrations/outlook', authenticate, outlookRouter);
+app.use('/api/integrations/gmail', authenticate, gmailRouter)
+app.use('/api/integrations/outlook', authenticate, outlookRouter)
+app.use('/api/integrations/yahoo', authenticate, yahooRouter)
+app.use('/api/integrations/icloud', authenticate, icloudRouter)
 app.use('/api/integrations/slack', authenticate, slackRouter);
 app.use('/api/integrations/email', authenticate, emailRescanRoutes);
 // No blanket `authenticate` here: POST / is called server-to-server by the
