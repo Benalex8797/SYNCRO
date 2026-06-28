@@ -34,6 +34,30 @@ export const EXTERNAL_SERVICE_POLICIES: Record<string, ServicePolicy> = {
       jitter: true,
     },
   },
+
+  // Yahoo Mail (IMAP)
+  yahoo: {
+    timeoutMs: 30000,
+    retryPolicy: {
+      maxAttempts: 3,
+      initialDelay: 1000,
+      maxDelay: 5000,
+      multiplier: 2,
+      jitter: true,
+    },
+  },
+
+  // iCloud Mail (IMAP)
+  icloud: {
+    timeoutMs: 30000,
+    retryPolicy: {
+      maxAttempts: 3,
+      initialDelay: 1000,
+      maxDelay: 5000,
+      multiplier: 2,
+      jitter: true,
+    },
+  },
   
   // Stellar / Soroban RPC
   stellar_rpc: {
