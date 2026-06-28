@@ -66,10 +66,12 @@ import { expiryService } from './services/expiry-service';
 import { authenticate } from './middleware/auth'
 import { adminAuth } from './middleware/admin';
 import { createAdminLimiter, RateLimiterFactory } from './middleware/rate-limit-factory';
-import { scheduleAutoResume } from './jobs/auto-resume';
-import { startSettlementBatchJob } from './jobs/settlement-batch-job';
-import { startChannelSettlementJob } from './jobs/channel-settlement-job';
+import { scheduleAutoResume, stopAutoResume } from './jobs/auto-resume';
+import { startSettlementBatchJob, stopSettlementBatchJob } from './jobs/settlement-batch-job';
+import { startChannelSettlementJob, stopChannelSettlementJob } from './jobs/channel-settlement-job';
 import { startJobAlertMonitor, stopJobAlertMonitor } from './jobs/job-alert-monitor';
+import { isDraining } from './lib/shutdown-state';
+import { registerGracefulShutdown } from './lib/graceful-shutdown';
 import giftCardLedgerRoutes from './routes/gift-card-ledger';
 import notificationDeadLetterRoutes from './routes/notification-dead-letter';
 import telegramWebhookRoutes from './routes/telegram-webhook';
@@ -134,15 +136,42 @@ app.use(express.urlencoded({ extended: true }));
 app.use(requestIdMiddleware);
 app.use(requestLoggerMiddleware);
 
+// Reject new work while draining for graceful shutdown
+app.use((req, res, next) => {
+  if (isDraining()) {
+    res.setHeader('Connection', 'close');
+    return res.status(503).json({
+      status: 'draining',
+      message: 'Server is shutting down',
+      timestamp: new Date().toISOString(),
+    });
+  }
+  next();
+});
+
 // Health & Readiness Endpoints (No Auth Required)
 // Liveness probe - indicates if the process is alive
 app.get('/health/live', (req, res) => {
+  if (isDraining()) {
+    return res.status(503).json({
+      status: 'draining',
+      timestamp: new Date().toISOString(),
+      message: 'Server is shutting down',
+    });
+  }
   const status = dependencyHealthService.getLiveness();
   res.status(200).json(status);
 });
 
 // Readiness probe - indicates if the service is ready to accept traffic
 app.get('/health/ready', async (req, res) => {
+  if (isDraining()) {
+    return res.status(503).json({
+      status: 'draining',
+      timestamp: new Date().toISOString(),
+      message: 'Server is shutting down',
+    });
+  }
   try {
     const status = await dependencyHealthService.getReadiness();
     const httpStatus = status.status === 'ready' ? 200 : 503;
@@ -159,6 +188,14 @@ app.get('/health/ready', async (req, res) => {
 
 // Legacy health endpoint (deprecated - use /health/live and /health/ready)
 app.get('/health', (req, res) => {
+  if (isDraining()) {
+    return res.status(503).json({
+      status: 'draining',
+      timestamp: new Date().toISOString(),
+      message: 'Server is shutting down',
+      deprecated: true,
+    });
+  }
   res.json({ status: 'ok', timestamp: new Date().toISOString(), deprecated: true });
 });
 
@@ -360,6 +397,13 @@ app.get('/api/admin/metrics/ops-summary', createAdminLimiter(), adminAuth, async
 
 app.get('/api/admin/health', createAdminLimiter(), adminAuth, async (req, res) => {
   try {
+    if (isDraining()) {
+      return res.status(503).json({
+        status: 'draining',
+        timestamp: new Date().toISOString(),
+        message: 'Server is shutting down',
+      });
+    }
     const includeHistory = req.query.history !== 'false';
     const health = await healthService.getAdminHealth(includeHistory, eventListener.getHealth());
     const statusCode = health.status === 'unhealthy' ? 503 : 200;
@@ -449,11 +493,25 @@ export function validateMnemonic(mnemonic: string): boolean {
 
 // Health Metrics Snapshot Loop
 const HEALTH_SNAPSHOT_INTERVAL_MS = 15 * 60 * 1000;
+let healthSnapshotInterval: ReturnType<typeof setInterval> | null = null;
+let healthSnapshotTimeout: ReturnType<typeof setTimeout> | null = null;
+
 function startHealthSnapshotInterval() {
-  setInterval(() => {
+  healthSnapshotInterval = setInterval(() => {
     healthService.recordSnapshot().catch(() => {});
   }, HEALTH_SNAPSHOT_INTERVAL_MS);
-  setTimeout(() => healthService.recordSnapshot().catch(() => {}), 5000);
+  healthSnapshotTimeout = setTimeout(() => healthService.recordSnapshot().catch(() => {}), 5000);
+}
+
+function clearHealthSnapshotInterval() {
+  if (healthSnapshotInterval) {
+    clearInterval(healthSnapshotInterval);
+    healthSnapshotInterval = null;
+  }
+  if (healthSnapshotTimeout) {
+    clearTimeout(healthSnapshotTimeout);
+    healthSnapshotTimeout = null;
+  }
 }
 
 // Start Server
@@ -497,18 +555,15 @@ const server = app.listen(PORT, async () => {
   }
 });
 
-// Graceful shutdown
-const shutdown = () => {
-  logger.info('Shutting down gracefully');
-  schedulerService.stop();
-  stopJobAlertMonitor();
-  telegramCommandService.stop();
-  eventListener.stop();
-  server.close(() => {
-    logger.info('Server closed');
-    process.exit(0);
-  });
-};
-
-process.on('SIGTERM', shutdown);
-process.on('SIGINT', shutdown);
+registerGracefulShutdown(server, {
+  stopBackgroundJobs: () => {
+    schedulerService.stop();
+    stopAutoResume();
+    stopSettlementBatchJob();
+    stopChannelSettlementJob();
+    stopJobAlertMonitor();
+  },
+  stopEventListener: () => eventListener.stop(),
+  stopTelegram: () => telegramCommandService.stop(),
+  clearHealthSnapshotInterval,
+});

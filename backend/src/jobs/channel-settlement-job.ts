@@ -1,16 +1,18 @@
-import cron from 'node-cron';
+import cron, { type ScheduledTask } from 'node-cron';
 import logger from '../config/logger';
 import { runWithCorrelationId } from '../middleware/requestContext';
 import { channelStateService } from '../services/channel-state';
 import { paymentChannelService } from '../services/payment-channel-service';
 import { settlementBatcher } from '../services/settlement-batcher';
 
+let channelSettlementTask: ScheduledTask | null = null;
+
 /**
  * Periodically settles accumulated channel balances on-chain per user schedule
  * (monthly or quarterly). Runs daily at 02:00 UTC.
  */
 export function startChannelSettlementJob(): void {
-  cron.schedule('0 2 * * *', () =>
+  channelSettlementTask = cron.schedule('0 2 * * *', () =>
     runWithCorrelationId('cron:channel-settlement', async (cid) => {
       if (process.env.PAYMENT_CHANNELS_ENABLED !== 'true') return;
 
@@ -57,4 +59,12 @@ export function startChannelSettlementJob(): void {
   );
 
   logger.info('Channel settlement cron job scheduled (daily 02:00 UTC)');
+}
+
+export function stopChannelSettlementJob(): void {
+  if (channelSettlementTask) {
+    channelSettlementTask.stop();
+    channelSettlementTask = null;
+    logger.info('Channel settlement cron job stopped');
+  }
 }
