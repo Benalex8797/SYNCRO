@@ -1,15 +1,27 @@
 # Syncro Backend SDK
 
-Subscription CRUD wrapper for the Syncro backend. Developers should use these SDK methods instead of calling raw API endpoints or Soroban contracts directly.
+Official TypeScript/JavaScript SDK for the **SYNCRO** Subscription Management Platform.
+
+Subscription CRUD wrapper for the Syncro backend with integrated privacy-preserving cryptography. Developers should use these SDK methods instead of calling raw API endpoints or Soroban contracts directly.
 
 ## Features
 
+### Subscription Management
 - **createSubscription()** – Create subscriptions with validation and backend + on-chain sync
 - **updateSubscription()** – Update subscriptions with validation
 - **getSubscription()** – Fetch a single subscription by ID
 - **cancelSubscription()** – Soft cancel (set status to `cancelled`)
 - **deleteSubscription()** – Permanently delete a subscription
 - **attachGiftCard()** – Attach gift card info (manual and gift-card subscriptions)
+
+### Privacy & Security
+- **Stealth Addresses** – One-time payment addresses hiding recipient wallet
+- **Metadata Encryption** – Client-side encryption for subscription details
+- **Pedersen Commitments** – Hide payment amounts while proving correctness
+- **Key Derivation** – Deterministic key generation from passwords
+- **Payment Commitments** – Prove payment facts without revealing data
+
+### Reliability & Configuration
 - **Strictly typed configuration** – Type-safe SDK initialization with sensible defaults
 - **Automatic retry logic** – Configurable exponential backoff for resilience
 - **Request timeout control** – Prevent hanging requests with timeout configuration
@@ -204,6 +216,122 @@ const unread = await sdk.getNotifications({ unreadOnly: true });
 ```typescript
 await sdk.markNotificationRead('notification-uuid');
 ```
+
+---
+
+## Privacy Features
+
+### Overview
+
+SYNCRO provides end-to-end encryption and privacy-preserving payment mechanisms:
+
+- **Hide Payment Recipient** – Stealth addresses make payments unlinkable
+- **Hide Service Details** – Metadata encryption keeps subscriptions private
+- **Hide Payment Amounts** – Pedersen commitments prove amounts without revealing them
+- **Deterministic Keys** – Derive encryption keys from passwords without storing them
+
+### Quick Start: Basic Privacy
+
+```typescript
+import {
+  generateStealthMetaAddress,
+  deriveEphemeralStealthAddress,
+  encryptSubscriptionMetadata,
+} from '@syncro/sdk';
+
+// Step 1: Generate your stealth identity (once)
+const meta = generateStealthMetaAddress();
+console.log('Share this:', meta.encoded);
+
+// Step 2: Generate one-time address for each payment
+const paymentAddr = deriveEphemeralStealthAddress(
+  { viewPublicKey: meta.viewPublicKey, spendPublicKey: meta.spendPublicKey },
+  'netflix-subscription:payment-0'
+);
+console.log('Send payment to:', paymentAddr.stealthAddress);
+
+// Step 3: Encrypt subscription metadata
+const encrypted = await encryptSubscriptionMetadata(
+  'your-aes-key-hex',
+  {
+    name: 'Netflix',
+    price: 15.99,
+    cycle: 'monthly',
+    provider: 'netflix.com'
+  }
+);
+// Only you can decrypt with your key
+```
+
+### Privacy API Reference
+
+#### Stealth Addresses
+
+```typescript
+import { generateStealthMetaAddress, deriveEphemeralStealthAddress } from '@syncro/sdk';
+
+// Generate stealth identity
+const meta = generateStealthMetaAddress();
+// { viewPublicKey, spendPublicKey, encoded }
+
+// Generate one-time address per payment
+const result = deriveEphemeralStealthAddress(meta, 'unique-entropy');
+// { ephemeralPubkey, stealthAddress }
+```
+
+#### Metadata Encryption
+
+```typescript
+import { encryptSubscriptionMetadata, decryptSubscriptionMetadata } from '@syncro/sdk';
+
+// Encrypt
+const encrypted = await encryptSubscriptionMetadata(keyHex, {
+  name: 'Netflix',
+  price: 15.99,
+  cycle: 'monthly',
+  provider: 'netflix.com'
+});
+
+// Decrypt (only with correct key)
+const metadata = await decryptSubscriptionMetadata(keyHex, encrypted);
+```
+
+#### Pedersen Commitments
+
+```typescript
+import { commit, verify } from '@syncro/sdk';
+
+// Create commitment to amount
+const commitment = commit(1500n); // $15.00
+// { commitment, blindingFactor }
+
+// Verify amount later
+const isValid = verify(1500n, blindingFactor, commitment.commitment);
+```
+
+#### Key Derivation
+
+```typescript
+import { deriveSubscriptionEncryptionKey } from '@syncro/sdk';
+
+// Derive key from password (deterministic)
+const key = await deriveSubscriptionEncryptionKey(password, subscriptionId);
+// Same password + subscription = same key
+// No need to store keys!
+```
+
+### Comprehensive Privacy Documentation
+
+For complete guides and examples, see the privacy documentation:
+
+- **[Privacy Features Overview](./docs/privacy/README.md)** – Start here
+- **[Stealth Addresses](./docs/privacy/stealth-addresses.md)** – One-time payment addresses
+- **[Metadata Encryption](./docs/privacy/metadata-encryption.md)** – Encrypt subscription details
+- **[Pedersen Commitments](./docs/privacy/pedersen-commitments.md)** – Hide payment amounts
+- **[Integration Guide](./docs/privacy/integration-guide.md)** – How to build privacy into your app
+- **[Migration Guide](./docs/privacy/migration-guide.md)** – Add privacy to existing apps
+- **[Security Considerations](./docs/privacy/security-considerations.md)** – Threat models & best practices
+- **[API Reference](./docs/privacy/api-reference.md)** – Complete function reference
 
 ---
 
