@@ -1,6 +1,7 @@
 import { supabase } from '../config/database';
 import logger from '../config/logger';
 import { redis } from '../config/redis';
+import { schedulerService } from './scheduler';
 
 export interface DependencyStatus {
   name: string;
@@ -58,7 +59,9 @@ export class DependencyHealthService {
   }
 
   /**
-   * Check Redis connectivity
+   * Check Redis connectivity.
+   * Returns degraded (not unhealthy) when Redis is not configured, so that a
+   * deployment without Redis does not block the readiness probe.
    */
   async checkRedis(): Promise<DependencyStatus> {
     const start = Date.now();
@@ -66,7 +69,7 @@ export class DependencyHealthService {
       if (!redis) {
         return {
           name: 'redis',
-          status: 'unhealthy',
+          status: 'degraded',
           latency_ms: Date.now() - start,
           error: 'Redis not configured',
         };
@@ -89,15 +92,23 @@ export class DependencyHealthService {
   }
 
   /**
-   * Check queue service (Bull/Redis-based)
+   * Check queue service (Bull/Redis-based).
+   * Treated as optional; degrades gracefully when Redis is absent.
    */
   async checkQueue(): Promise<DependencyStatus> {
     const start = Date.now();
     try {
-      // Try to connect to queue via Redis
-      const queueHealth = await redis?.ping();
-      
-      if (!queueHealth) {
+      if (!redis) {
+        return {
+          name: 'queue',
+          status: 'degraded',
+          latency_ms: Date.now() - start,
+          error: 'Redis not configured; queue unavailable',
+        };
+      }
+
+      const pong = await redis.ping();
+      if (!pong) {
         return {
           name: 'queue',
           status: 'unhealthy',
@@ -117,6 +128,30 @@ export class DependencyHealthService {
         status: 'unhealthy',
         latency_ms: Date.now() - start,
         error: error instanceof Error ? error.message : 'Queue check failed',
+      };
+    }
+  }
+
+  /**
+   * Check background scheduler / processor.
+   * Healthy when cron jobs are running; degraded when scheduler has no jobs.
+   */
+  checkScheduler(): DependencyStatus {
+    try {
+      const { running, jobCount } = schedulerService.getStatus();
+      if (running && jobCount > 0) {
+        return { name: 'scheduler', status: 'healthy' };
+      }
+      return {
+        name: 'scheduler',
+        status: 'degraded',
+        error: running ? 'Scheduler running but 0 jobs registered' : 'Scheduler not started',
+      };
+    } catch (error) {
+      return {
+        name: 'scheduler',
+        status: 'unhealthy',
+        error: error instanceof Error ? error.message : 'Scheduler check failed',
       };
     }
   }
@@ -181,7 +216,7 @@ export class DependencyHealthService {
       this.checkProviders(),
     ]);
 
-    return checks;
+    return [...checks, this.checkScheduler()];
   }
 
   /**

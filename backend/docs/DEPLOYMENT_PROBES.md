@@ -157,6 +157,13 @@ readinessProbe:
 - No actual API calls (lightweight check)
 - **Failure impact**: Some features unavailable but service functional
 
+### Scheduler / Background Processor (Optional)
+- Checks that the cron scheduler has been started and has jobs registered
+- Uses `schedulerService.getStatus()` — no external calls, synchronous
+- Returns **healthy** when running with ≥1 registered jobs
+- Returns **degraded** when the scheduler has no jobs or hasn't started
+- **Failure impact**: Reminder emails, renewal processing, risk recalculation, and other background jobs will not fire on schedule; real-time user requests are unaffected
+
 ## Recommended Kubernetes Configuration
 
 ```yaml
@@ -313,6 +320,7 @@ const readiness = await dependencyHealthService.getReadiness();
 
 // Get individual dependency status
 const allDeps = await dependencyHealthService.checkAllDependencies();
+// includes: database, redis, queue, providers, scheduler
 ```
 
 ### Adding New Dependency Checks
@@ -321,7 +329,7 @@ To add a new dependency check:
 
 1. Add a `check<Service>()` method to `DependencyHealthService`
 2. Include it in `checkAllDependencies()`
-3. Classify as critical or optional
+3. Classify as critical or optional (only `database` and `redis` block readiness)
 4. Update this document with dependency details
 
 Example:
@@ -330,9 +338,9 @@ async checkPostgres(): Promise<DependencyStatus> {
   const start = Date.now();
   try {
     // Your check implementation
-    return { name: 'postgres', status: 'healthy', latency_ms: ... };
+    return { name: 'postgres', status: 'healthy', latency_ms: Date.now() - start };
   } catch (error) {
-    return { name: 'postgres', status: 'unhealthy', error: ... };
+    return { name: 'postgres', status: 'unhealthy', latency_ms: Date.now() - start, error: String(error) };
   }
 }
 ```
