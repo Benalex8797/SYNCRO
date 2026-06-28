@@ -3,6 +3,7 @@
 import { ArrowRight, Lock, LockOpen, Mail, Sparkles, Package } from "lucide-react"
 import { useState } from "react"
 import { TrialSection } from "./trial-section"
+import { SubscriptionForecastChart } from "@/components/subscription-forecast-chart"
 import { formatCurrency, convertCurrency, type Currency } from "@/lib/currency-utils"
 import { formatDate, formatDateTime, getDaysDifference } from "@/lib/timezone-utils"
 import { useUserSettings } from "@/components/providers/user-settings-provider"
@@ -361,6 +362,14 @@ export default function DashboardPage({
       {/* ── Subscription grid ── */}
       {!hasNoResults && (
         <>
+          {/* ── Subscription Cost Forecast Chart ─────────────────────────── */}
+          <div className="mb-8">
+            <SubscriptionForecastChart
+              subscriptions={subscriptions}
+              darkMode={darkMode}
+            />
+          </div>
+
           <TrialSection
             trials={activeTrials}
             darkMode={darkMode}
