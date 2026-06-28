@@ -97,3 +97,49 @@ export function deriveStealthAddress(
 function bytesToHex(bytes: Uint8Array): string {
   return Array.from(bytes, (b) => b.toString(16).padStart(2, "0")).join("");
 }
+
+/**
+ * Recipient-side stealth detection: derive one-time destination from memo R.
+ */
+export function detectStealthDestination(
+  viewPrivateKeyHex: string,
+  spendPublicKeyHex: string,
+  ephemeralPubkeyHex: string,
+): string {
+  const n = secp256k1.CURVE.n;
+  const normalized = ephemeralPubkeyHex.length === 64 ? `02${ephemeralPubkeyHex}` : ephemeralPubkeyHex;
+  const viewScalar = BigInt("0x" + viewPrivateKeyHex) % n;
+  if (viewScalar === 0n) throw new Error("Invalid view private key");
+
+  const R = secp256k1.ProjectivePoint.fromHex(normalized);
+  const S = R.multiply(viewScalar);
+  const h = BigInt("0x" + bytesToHex(sha256(S.toRawBytes(true)))) % n;
+
+  const spendPoint = secp256k1.ProjectivePoint.fromHex(spendPublicKeyHex);
+  const P = spendPoint.add(secp256k1.ProjectivePoint.BASE.multiply(h));
+
+  return bytesToHex(P.toRawBytes(true));
+}
+
+/**
+ * Recipient-side stealth detection: given ephemeral pubkey R from a tx memo,
+ * derive the one-time destination P = spend_pubkey + hash(view_privkey * R)*G.
+ */
+export function detectStealthDestination(
+  viewPrivateKeyHex: string,
+  spendPublicKeyHex: string,
+  ephemeralPubkeyHex: string,
+): string {
+  const n = secp256k1.CURVE.n;
+  const viewScalar = BigInt("0x" + viewPrivateKeyHex) % n;
+  if (viewScalar === 0n) throw new Error("Invalid view private key");
+
+  const R = secp256k1.ProjectivePoint.fromHex(ephemeralPubkeyHex);
+  const S = R.multiply(viewScalar);
+  const h = BigInt("0x" + bytesToHex(sha256(S.toRawBytes(true)))) % n;
+
+  const spendPoint = secp256k1.ProjectivePoint.fromHex(spendPublicKeyHex);
+  const P = spendPoint.add(secp256k1.ProjectivePoint.BASE.multiply(h));
+
+  return bytesToHex(P.toRawBytes(true));
+}

@@ -68,6 +68,7 @@ import { adminAuth } from './middleware/admin';
 import { createAdminLimiter, RateLimiterFactory } from './middleware/rate-limit-factory';
 import { scheduleAutoResume } from './jobs/auto-resume';
 import { startSettlementBatchJob } from './jobs/settlement-batch-job';
+import { startStealthScanJob } from './jobs/stealth-scan-job';
 import { startChannelSettlementJob } from './jobs/channel-settlement-job';
 import { startJobAlertMonitor, stopJobAlertMonitor } from './jobs/job-alert-monitor';
 import giftCardLedgerRoutes from './routes/gift-card-ledger';
@@ -488,6 +489,7 @@ const server = app.listen(PORT, async () => {
 
   scheduleAutoResume();
   startSettlementBatchJob();
+  startStealthScanJob();
   startChannelSettlementJob();
   startJobAlertMonitor();
 
