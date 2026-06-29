@@ -37,6 +37,10 @@ export const userPreferencesUpdateSchema = z.object({
     .optional(),
   privacy_mode_enabled: z.boolean().optional(),
   encryption_key: z.string().optional(),
+  subscription_priority_order: z
+    .array(z.string().uuid('Each subscription ID must be a valid UUID'))
+    .max(500, 'Maximum 500 subscriptions in priority order')
+    .optional(),
 });
 
 // ─── Quiet Hours Schema ─────────────────────────────────────────────────────

@@ -25,6 +25,7 @@ export interface UserPreferences {
   preferred_gift_card_provider: string
   privacy_mode_enabled: boolean
   encryption_key?: string
+  subscription_priority_order?: string[]
   updated_at: string
 }
 
@@ -52,6 +53,7 @@ export interface UserPreferencesUpdateInput {
   preferred_gift_card_provider?: string
   privacy_mode_enabled?: boolean
   encryption_key?: string
+  subscription_priority_order?: string[]
 }
 
 export interface QuietHoursUpdateInput {
