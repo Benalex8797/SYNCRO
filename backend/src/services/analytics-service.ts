@@ -41,6 +41,15 @@ export class AnalyticsService {
 
       if (budgetError) throw budgetError;
 
+      // Get suggestions to calculate potential savings
+      const { data: suggestions, error: suggestionError } = await supabase
+        .from('suggestions')
+        .select('savings_per_year')
+        .eq('user_id', userId)
+        .eq('dismissed_until', null);
+
+      if (suggestionError) throw suggestionError;
+
       const typedSubs = (subscriptions || []) as Subscription[];
       const typedBudgets = (budgets || []) as Budget[];
 
@@ -58,6 +67,9 @@ export class AnalyticsService {
       };
 
       const upcomingRenewalsCount = countUpcomingRenewals(typedSubs, 7);
+      const potentialSavingsMonthly = (suggestions || [])
+        .filter(s => s.savings_per_year)
+        .reduce((sum, s) => sum + (s.savings_per_year || 0) / 12, 0);
 
       const summary = {
         total_monthly_spend: totalMonthlySpend,
@@ -66,7 +78,8 @@ export class AnalyticsService {
         monthly_trend: monthlyTrend,
         category_breakdown: categoryBreakdown,
         top_subscriptions: topSubscriptions,
-        budget_status: budgetStatus
+        budget_status: budgetStatus,
+        potential_savings_monthly: parseFloat(potentialSavingsMonthly.toFixed(2))
       };
 
       await queryCacheService.set(
