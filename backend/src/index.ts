@@ -88,6 +88,8 @@ import reminderSettingsRoutes from './routes/reminder-settings';
 import { blockchainReconciliationService } from './services/blockchain-reconciliation-service';
 import paymentsRoutes from './routes/payments';
 import paystackWebhookRoutes from './routes/paystack-webhook';
+import stripeWebhookRoutes from './routes/stripe-webhook';
+import paypalWebhookRoutes from './routes/paypal-webhook';
 import adminDeletionsRoutes from './routes/admin-deletions';
 import agentWalletsRoutes from './routes/agent-wallets';
 import paymentChannelsRoutes from './routes/payment-channels';
@@ -134,8 +136,10 @@ app.use((req, res, next) => {
   next();
 });
 
-// Paystack webhooks require raw body for HMAC-SHA512 verification
+// Payment webhooks require raw body for cryptographic signature verification
 app.use('/api/webhooks/paystack', express.raw({ type: 'application/json' }), paystackWebhookRoutes);
+app.use('/api/webhooks/stripe', express.raw({ type: 'application/json' }), stripeWebhookRoutes);
+app.use('/api/webhooks/paypal', express.raw({ type: 'application/json' }), paypalWebhookRoutes);
 
 // Basic Middlewares
 app.use(cookieParser());
