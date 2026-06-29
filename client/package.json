@@ -82,7 +82,7 @@
     "react-joyride-react-19": "^2.9.2",
     "react-qr-code": "^2.0.18",
     "react-resizable-panels": "^4.11.2",
-    "sonner": "^1.7.4",
+    "sonner": "^2.0.7",
     "stripe": "^22.1.0",
     "tailwind-merge": "^3.6.0",
     "tailwindcss-animate": "^1.0.7",
