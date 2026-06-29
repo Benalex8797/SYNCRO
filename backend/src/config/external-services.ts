@@ -61,12 +61,12 @@ export const EXTERNAL_SERVICE_POLICIES: Record<string, ServicePolicy> = {
   
   // Stellar / Soroban RPC
   stellar_rpc: {
-    timeoutMs: 5000,
+    timeoutMs: 15000,
     retryPolicy: {
       maxAttempts: 5,
-      initialDelay: 500,
-      maxDelay: 2000,
-      multiplier: 1.5,
+      initialDelay: 1000,
+      maxDelay: 16000,
+      multiplier: 2,
       jitter: true,
     },
   },
