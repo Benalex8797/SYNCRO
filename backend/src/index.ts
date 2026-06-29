@@ -96,6 +96,8 @@ import agentWalletsRoutes from './routes/agent-wallets';
 import paymentChannelsRoutes from './routes/payment-channels';
 import { errorHandler } from './middleware/errorHandler';
 import { swaggerSpec } from './swagger';
+import privacyMetricsAdminRoutes from './routes/admin/privacy-metrics';
+
 
 const app = express();
 const PORT = process.env.PORT || 3001;
@@ -298,6 +300,8 @@ app.get('/api/reminders/status', (req, res) => {
 app.use('/admin/queues', adminQueuesRoutes);
 app.use('/api/admin/deletions', adminDeletionsRoutes);
 app.use('/api/admin/agent-wallets', createAdminLimiter(), agentWalletsRoutes);
+app.use('/api/admin', privacyMetricsAdminRoutes);
+
 
 app.get('/api/admin/metrics/subscriptions', createAdminLimiter(), adminAuth, async (req, res) => {
   try {
@@ -567,9 +571,9 @@ let healthSnapshotTimeout: ReturnType<typeof setTimeout> | null = null;
 
 function startHealthSnapshotInterval() {
   healthSnapshotInterval = setInterval(() => {
-    healthService.recordSnapshot().catch(() => {});
+    healthService.recordSnapshot().catch(() => { });
   }, HEALTH_SNAPSHOT_INTERVAL_MS);
-  healthSnapshotTimeout = setTimeout(() => healthService.recordSnapshot().catch(() => {}), 5000);
+  healthSnapshotTimeout = setTimeout(() => healthService.recordSnapshot().catch(() => { }), 5000);
 }
 
 function clearHealthSnapshotInterval() {
