@@ -59,7 +59,7 @@
     "@react-pdf/renderer": "^4.3.2",
     "@rolldown/binding-linux-x64-gnu": "^1.1.2",
     "@sentry/nextjs": "^10.56.0",
-    "@stripe/react-stripe-js": "5.2.0",
+    "@stripe/react-stripe-js": "6.6.0",
     "@supabase/ssr": "^0.10.2",
     "@supabase/supabase-js": "^2.107.0",
     "@syncro/shared": "file:../shared",
