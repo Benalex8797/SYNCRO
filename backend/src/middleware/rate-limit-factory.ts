@@ -1,9 +1,10 @@
 import rateLimit, { RateLimitRequestHandler } from 'express-rate-limit';
-import { Request } from 'express';
+import { Request, RequestHandler } from 'express';
 import { rateLimitConfig } from '../config/rate-limit';
 import { createRedisStore } from '../lib/redis-store';
 import { AuthenticatedRequest } from './auth';
 import logger from '../config/logger';
+import { createSubscriptionTierLimiter, TierRateLimiterOptions } from './subscription-tier-rate-limiter';
 
 /**
  * Key generator for user-based rate limiting
@@ -302,6 +303,15 @@ export class RateLimiterFactory {
   }
 
   /**
+   * Create rate limiter based on the authenticated user's subscription tier.
+   * Free: 100 req/min, Pro: 500 req/min, Enterprise: 2000 req/min.
+   * Uses a Redis sliding window counter when Redis is available.
+   */
+  static createSubscriptionTierLimiter(opts: TierRateLimiterOptions = {}): RequestHandler {
+    return createSubscriptionTierLimiter(opts);
+  }
+
+  /**
    * Get Redis store status for health monitoring.
    * When `degraded` is true the app is running with the in-memory fallback
    * because Redis was configured but is currently unreachable.
@@ -325,3 +335,4 @@ export const createStealthAddressLimiter = () => RateLimiterFactory.createStealt
 export const createZkProofLimiter = () => RateLimiterFactory.createZkProofLimiter();
 export const createPaymentChannelStateUpdateLimiter = () => RateLimiterFactory.createPaymentChannelStateUpdateLimiter();
 export const createSelectiveDisclosureLimiter = () => RateLimiterFactory.createSelectiveDisclosureLimiter();
+export { createSubscriptionTierLimiter } from './subscription-tier-rate-limiter';
