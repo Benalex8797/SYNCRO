@@ -4,6 +4,14 @@ import { describe, test, it, expect, vi, beforeEach } from 'vitest'
 import { SubscriptionCard } from '../pages/subscriptions'
 import { mockSubscription, mockCancellationGuide } from '@/lib/test-utils'
 
+vi.mock('@/components/providers/user-settings-provider', () => ({
+  useUserSettings: () => ({
+    settings: { currency: 'USD', timezone: 'UTC', locale: 'en-US', privacyModeEnabled: false },
+    updateSettings: vi.fn(),
+    isLoading: false,
+  }),
+}))
+
 describe('SubscriptionCard', () => {
   const defaultProps = {
     subscription: mockSubscription({

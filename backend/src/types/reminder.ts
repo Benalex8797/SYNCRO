@@ -134,6 +134,8 @@ export interface UserPreferences {
   preferred_gift_card_provider: string;
   privacy_mode_enabled: boolean;
   encryption_key?: string;
+  /** Subscription IDs in personal priority order (highest first). */
+  subscription_priority_order: string[];
   /** ISO-8601 UTC string. */
   updated_at: string;
 }
