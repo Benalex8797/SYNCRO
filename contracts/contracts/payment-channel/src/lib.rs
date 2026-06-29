@@ -288,3 +288,6 @@ impl PaymentChannelContract {
 }
 
 mod test;
+
+#[cfg(test)]
+mod fuzz;
