@@ -88,6 +88,7 @@ import reminderSettingsRoutes from './routes/reminder-settings';
 import { blockchainReconciliationService } from './services/blockchain-reconciliation-service';
 import paymentsRoutes from './routes/payments';
 import paystackWebhookRoutes from './routes/paystack-webhook';
+import adminDeletionsRoutes from './routes/admin-deletions';
 import agentWalletsRoutes from './routes/agent-wallets';
 import paymentChannelsRoutes from './routes/payment-channels';
 import { errorHandler } from './middleware/errorHandler';
@@ -132,6 +133,9 @@ app.use((req, res, next) => {
   }
   next();
 });
+
+// Paystack webhooks require raw body for HMAC-SHA512 verification
+app.use('/api/webhooks/paystack', express.raw({ type: 'application/json' }), paystackWebhookRoutes);
 
 // Basic Middlewares
 app.use(cookieParser());
@@ -252,7 +256,6 @@ app.use('/api/integrations/email', authenticate, emailRescanRoutes);
 // themselves within csp-violations.ts.
 app.use('/api/csp-violations', cspViolationsRoutes);
 app.use('/api/webhooks', webhookRoutes);
-app.use('/api/webhooks/paystack', paystackWebhookRoutes);
 app.use('/api/compliance', complianceRoutes);
 app.use('/api/tags', tagsRoutes);
 app.use('/api/user', userRoutes);
@@ -279,6 +282,7 @@ app.get('/api/reminders/status', (req, res) => {
 });
 
 // Admin Monitoring Endpoints
+app.use('/api/admin/deletions', adminDeletionsRoutes);
 app.use('/api/admin/agent-wallets', createAdminLimiter(), agentWalletsRoutes);
 
 app.get('/api/admin/metrics/subscriptions', createAdminLimiter(), adminAuth, async (req, res) => {
