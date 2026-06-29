@@ -1,7 +1,6 @@
 import { createClient } from '@/lib/supabase/server'
 import { buildQueryWarning, type DataLoadWarning } from '@/lib/dashboard-bootstrap'
 import { fetchConsolidationSuggestions, filterDismissedSuggestions } from '@/lib/dashboard-data'
-import type { ConsolidationSuggestion } from '@/lib/types/dashboard'
 import type { ConsolidationSuggestion } from '@/lib/types'
 
 export type InitialPriceChange = {
@@ -17,13 +16,13 @@ export type InitialPriceChange = {
 }
 
 export type InitialDataResult = {
-  subscriptions: any[]
-  emailAccounts: any[]
-  payments: any[]
-  priceChanges: InitialPriceChange[]
-  consolidationSuggestions: ConsolidationSuggestion[]
-  warnings: DataLoadWarning[]
-  isDemo: boolean
+  subscriptions: any[];
+  emailAccounts: any[];
+  payments: any[];
+  priceChanges: InitialPriceChange[];
+  consolidationSuggestions: any[];
+  warnings: DataLoadWarning[];
+  isDemo: boolean;
 }
 
 function transformSubscription(dbSub: any): any {
@@ -251,7 +250,6 @@ export async function getInitialData(): Promise<InitialDataResult> {
     emailAccounts,
     payments,
     priceChanges,
-    consolidationSuggestions,
     consolidationSuggestions: buildConsolidationSuggestions(subscriptions),
     warnings,
     isDemo: false,
