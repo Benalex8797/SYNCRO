@@ -8,6 +8,24 @@ export interface RateLimitConfig {
   legacyHeaders: boolean;
 }
 
+export type SubscriptionTier = 'free' | 'pro' | 'enterprise';
+
+export interface TierRateLimitConfig {
+  windowMs: number;
+  limits: Record<SubscriptionTier, number>;
+  sensitiveMultiplier: number;
+}
+
+export const TIER_RATE_LIMIT_CONFIG: TierRateLimitConfig = {
+  windowMs: 60 * 1000, // 1-minute sliding window
+  limits: {
+    free: 100,
+    pro: 500,
+    enterprise: 2000,
+  },
+  sensitiveMultiplier: 0.1, // 10% of normal limit for sensitive endpoints
+};
+
 export interface PrivacyRateLimitConfig {
   stealthAddress: RateLimitConfig & { windowHours: number };
   zkProof: RateLimitConfig & { windowMinutes: number };
