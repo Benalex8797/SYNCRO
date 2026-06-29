@@ -3,6 +3,7 @@ import { supabase } from "../config/database";
 import { NotificationPayload } from "../types/reminder";
 import { getRequestId } from "../middleware/requestContext";
 import crypto from 'crypto';
+import { calculateBackoffDelay } from "../utils/retry";
 import {
   Contract,
   Keypair,
@@ -631,7 +632,7 @@ export class BlockchainService {
     const contract = new Contract(this.contractAddress);
 
     let lastErr: unknown = null;
-    const { maxAttempts = 3, initialDelay = 500, multiplier = 2 } = this.policy.retryPolicy;
+    const { maxAttempts = 5, initialDelay = 1000, multiplier = 2, maxDelay = 16000, jitter = true } = this.policy.retryPolicy;
 
     const memoOperation = subscriptionId ? resolveMemoOperationFromMethod(method) : null;
     const expectedMemo =
@@ -690,12 +691,15 @@ export class BlockchainService {
         return { transactionHash: send.hash };
       } catch (err) {
         lastErr = err;
-        const delay = Math.min(initialDelay * Math.pow(multiplier, attempt), this.policy.retryPolicy.maxDelay || 30000);
-        logger.warn(
-          `Soroban tx attempt ${attempt + 1}/${maxAttempts} failed for method ${method}: ${
-            err instanceof Error ? err.message : String(err)
-          } — retrying in ${delay}ms`,
-        );
+        const reason = err instanceof Error ? err.message : String(err);
+        const delay = calculateBackoffDelay(attempt + 1, { initialDelay, maxDelay, multiplier, jitter });
+        logger.warn('Soroban tx attempt failed', {
+          method,
+          attempt: attempt + 1,
+          maxAttempts,
+          reason,
+          retryInMs: delay,
+        });
         await this.sleep(delay);
       }
     }
