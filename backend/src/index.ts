@@ -88,6 +88,10 @@ import reminderSettingsRoutes from './routes/reminder-settings';
 import { blockchainReconciliationService } from './services/blockchain-reconciliation-service';
 import paymentsRoutes from './routes/payments';
 import paystackWebhookRoutes from './routes/paystack-webhook';
+import stripeWebhookRoutes from './routes/stripe-webhook';
+import paypalWebhookRoutes from './routes/paypal-webhook';
+import adminDeletionsRoutes from './routes/admin-deletions';
+import adminQueuesRoutes, { getQueueHealthMetrics } from './routes/admin-queues';
 import agentWalletsRoutes from './routes/agent-wallets';
 import paymentChannelsRoutes from './routes/payment-channels';
 import { errorHandler } from './middleware/errorHandler';
@@ -132,6 +136,11 @@ app.use((req, res, next) => {
   }
   next();
 });
+
+// Payment webhooks require raw body for cryptographic signature verification
+app.use('/api/webhooks/paystack', express.raw({ type: 'application/json' }), paystackWebhookRoutes);
+app.use('/api/webhooks/stripe', express.raw({ type: 'application/json' }), stripeWebhookRoutes);
+app.use('/api/webhooks/paypal', express.raw({ type: 'application/json' }), paypalWebhookRoutes);
 
 // Basic Middlewares
 app.use(cookieParser());
@@ -204,7 +213,8 @@ app.get('/health', async (req, res) => {
   try {
     const readiness = await dependencyHealthService.getReadiness();
     const liveness = dependencyHealthService.getLiveness();
-    const overallStatus = readiness.status === 'ready' ? 'ok' : 'degraded';
+    const queueHealth = await getQueueHealthMetrics();
+    const overallStatus = readiness.status === 'ready' && queueHealth.healthy ? 'ok' : 'degraded';
     const httpStatus = readiness.status === 'ready' ? 200 : 503;
     res.status(httpStatus).json({
       status: overallStatus,
@@ -213,6 +223,7 @@ app.get('/health', async (req, res) => {
       version: process.env.npm_package_version || '1.0.0',
       environment: process.env.NODE_ENV || 'development',
       dependencies: readiness.dependencies,
+      queues: queueHealth.queues,
       message: readiness.message,
     });
   } catch (error) {
@@ -252,7 +263,6 @@ app.use('/api/integrations/email', authenticate, emailRescanRoutes);
 // themselves within csp-violations.ts.
 app.use('/api/csp-violations', cspViolationsRoutes);
 app.use('/api/webhooks', webhookRoutes);
-app.use('/api/webhooks/paystack', paystackWebhookRoutes);
 app.use('/api/compliance', complianceRoutes);
 app.use('/api/tags', tagsRoutes);
 app.use('/api/user', userRoutes);
@@ -279,6 +289,8 @@ app.get('/api/reminders/status', (req, res) => {
 });
 
 // Admin Monitoring Endpoints
+app.use('/admin/queues', adminQueuesRoutes);
+app.use('/api/admin/deletions', adminDeletionsRoutes);
 app.use('/api/admin/agent-wallets', createAdminLimiter(), agentWalletsRoutes);
 
 app.get('/api/admin/metrics/subscriptions', createAdminLimiter(), adminAuth, async (req, res) => {
@@ -455,10 +467,12 @@ app.get('/api/admin/health', createAdminLimiter(), adminAuth, async (req, res) =
     }
     const includeHistory = req.query.history !== 'false';
     const health = await healthService.getAdminHealth(includeHistory, eventListener.getHealth());
+    const queueHealth = await getQueueHealthMetrics();
     const statusCode = health.status === 'unhealthy' ? 503 : 200;
     res.status(statusCode).json({
       ...health,
       db_pool: monitoringService.getPoolMetrics(),
+      queues: queueHealth,
     });
   } catch (error) {
     logger.error('Error fetching admin health:', error);

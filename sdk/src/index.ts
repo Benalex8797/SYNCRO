@@ -928,3 +928,19 @@ export type {
   SyncroMemoOperation,
   StellarTransactionReceipt,
 } from "./stellar/memo.js";
+export {
+  buildContractInvoke,
+  buildSubscriptionRegistryCreateSubscription,
+  buildSubscriptionRegistryUpdateSubscription,
+  buildSubscriptionRegistryCancelSubscription,
+  buildSubscriptionLoggingRecordLog,
+  buildSubscriptionRenewalRenew,
+} from "./generated/index.js";
+export type {
+  GeneratedContractMap,
+  SubscriptionRegistryContract,
+  SubscriptionLoggingContract,
+  SubscriptionRenewalContract,
+  BuiltTransaction,
+  ContractInvokeParams,
+} from "./generated/index.js";
