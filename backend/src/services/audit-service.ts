@@ -22,7 +22,9 @@ export type SecurityEventType =
   | 'api_key.rotated'
   | 'api_key.revoked'
   | 'api_key.auth_failed'
-  | 'api_key.suspicious_usage';
+  | 'api_key.suspicious_usage'
+  | 'session.invalidated_all'
+  | 'session.revoked';
 
 export interface SecurityEventMeta {
   severity: SecurityEventSeverity;
