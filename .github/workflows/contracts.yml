@@ -59,6 +59,11 @@ jobs:
             - name: Run contract tests
               run: cargo test
 
+            - name: Run contract fuzz tests
+              run: cargo test -p subscription_renewal -p escrow -p payment-channel fuzz_
+              env:
+                  PROPTEST_CASES: "8"
+
             - name: Verify backend contract interface alignment
               working-directory: ..
               run: |
