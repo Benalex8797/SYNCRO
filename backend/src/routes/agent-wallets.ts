@@ -35,7 +35,7 @@ router.use(adminAuth);
  *     summary: List rotation state for all pipeline agents
  *     tags: [AgentWallets]
  *     security:
- *       - AdminApiKey: []
+ *       - adminKey: []
  *     responses:
  *       200:
  *         description: Current rotation states
@@ -58,7 +58,7 @@ router.get('/', async (_req: Request, res: Response) => {
  *     summary: Get rotation state and address history for a single agent
  *     tags: [AgentWallets]
  *     security:
- *       - AdminApiKey: []
+ *       - adminKey: []
  *     parameters:
  *       - in: path
  *         name: agent
@@ -98,7 +98,7 @@ router.get('/:agent', async (req: Request, res: Response) => {
  *     summary: Force-rotate all pipeline agent wallets immediately
  *     tags: [AgentWallets]
  *     security:
- *       - AdminApiKey: []
+ *       - adminKey: []
  *     requestBody:
  *       required: false
  *       content:
@@ -133,7 +133,7 @@ router.post('/rotate', async (req: Request, res: Response) => {
  *     summary: Force-rotate a single pipeline agent wallet
  *     tags: [AgentWallets]
  *     security:
- *       - AdminApiKey: []
+ *       - adminKey: []
  *     parameters:
  *       - in: path
  *         name: agent

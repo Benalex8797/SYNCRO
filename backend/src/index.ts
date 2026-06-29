@@ -225,6 +225,12 @@ app.get('/health', async (req, res) => {
 });
 
 // Swagger Documentation
+app.use('/api-docs', swaggerUi.serve, swaggerUi.setup(swaggerSpec));
+app.get('/api-docs.json', (_req, res) => {
+  res.setHeader('Content-Type', 'application/json');
+  res.send(swaggerSpec);
+});
+// Legacy aliases
 app.use('/api/docs', swaggerUi.serve, swaggerUi.setup(swaggerSpec));
 app.get('/api/docs.json', (_req, res) => {
   res.setHeader('Content-Type', 'application/json');
