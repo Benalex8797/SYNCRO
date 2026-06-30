@@ -218,4 +218,83 @@ router.put('/profile', async (req: AuthenticatedRequest, res: Response) => {
   }
 });
 
+/**
+ * POST /api/user/password-change
+ * Updates the user's password and schedules session invalidation after a
+ * 5-minute grace period so any other open tabs have time to save work.
+ */
+router.post('/password-change', async (req: AuthenticatedRequest, res: Response) => {
+  try {
+    const userId = req.user!.id;
+    const { newPassword } = req.body as { newPassword?: string };
+
+    if (!newPassword || typeof newPassword !== 'string' || newPassword.length < 8) {
+      return res.status(400).json({ success: false, error: 'newPassword must be at least 8 characters' });
+    }
+
+    // Update password via Supabase admin API
+    const { error: updateError } = await supabase.auth.admin.updateUserById(userId, {
+      password: newPassword,
+    });
+
+    if (updateError) {
+      logger.error('Error updating password:', updateError);
+      return res.status(500).json({ success: false, error: 'Failed to update password' });
+    }
+
+    // Send a grace-period warning immediately, then invalidate after 5 minutes
+    const { sessionService } = await import('../services/session-service');
+
+    await sessionService.sendGracePeriodNotification(userId, 'password change', 5);
+
+    setTimeout(() => {
+      sessionService.invalidateAllSessions(userId, 'password_change').catch((err: unknown) => {
+        logger.error('Error invalidating sessions after password change:', err);
+      });
+    }, 5 * 60 * 1000);
+
+    logger.info('Password changed; sessions will be invalidated in 5 minutes', { userId });
+    return res.status(200).json({
+      success: true,
+      message: 'Password updated. All sessions will be signed out in 5 minutes.',
+    });
+  } catch (error) {
+    logger.error('Error changing password:', error);
+    return res.status(500).json({ success: false, error: 'Failed to change password' });
+  }
+});
+
+/**
+ * POST /api/user/wallet-disconnect
+ * Clears the Stellar wallet address from the user's profile and immediately
+ * invalidates all sessions (wallet ownership is a security boundary).
+ */
+router.post('/wallet-disconnect', async (req: AuthenticatedRequest, res: Response) => {
+  try {
+    const userId = req.user!.id;
+
+    const { error: profileError } = await supabase
+      .from('profiles')
+      .update({ stellar_wallet_address: null, updated_at: new Date().toISOString() })
+      .eq('id', userId);
+
+    if (profileError) {
+      logger.error('Error clearing wallet address:', profileError);
+      return res.status(500).json({ success: false, error: 'Failed to disconnect wallet' });
+    }
+
+    const { sessionService } = await import('../services/session-service');
+    await sessionService.invalidateAllSessions(userId, 'wallet_disconnect');
+
+    logger.info('Wallet disconnected and all sessions invalidated', { userId });
+    return res.status(200).json({
+      success: true,
+      message: 'Wallet disconnected and all sessions have been signed out.',
+    });
+  } catch (error) {
+    logger.error('Error disconnecting wallet:', error);
+    return res.status(500).json({ success: false, error: 'Failed to disconnect wallet' });
+  }
+});
+
 export default router;
