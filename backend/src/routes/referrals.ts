@@ -1,6 +1,7 @@
 import { Router, Response } from 'express';
 import { z } from 'zod';
 import { authenticate, AuthenticatedRequest } from '../middleware/auth';
+import { validate } from '../middleware/validate';
 import { referralService } from '../services/referral-service';
 import logger from '../config/logger';
 
@@ -45,15 +46,11 @@ const validateSchema = z.object({
  * Validates a referral code at signup and records the referral.
  * Body: { referralCode: string, referredUserId: string }
  */
-router.post('/validate', async (req: AuthenticatedRequest, res: Response) => {
-  const parsed = validateSchema.safeParse(req.body);
-  if (!parsed.success) {
-    res.status(400).json({ error: 'Invalid request', details: parsed.error.flatten() });
-    return;
-  }
+router.post('/validate', validate(validateSchema), async (req: AuthenticatedRequest, res: Response) => {
+  const parsed = req.body;
 
   try {
-    await referralService.validateAndRecord(parsed.data.referralCode, parsed.data.referredUserId);
+    await referralService.validateAndRecord(parsed.referralCode, parsed.referredUserId);
     res.json({ success: true });
   } catch (error) {
     logger.error('Failed to validate referral', { error });

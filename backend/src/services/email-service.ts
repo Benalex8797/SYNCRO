@@ -5,6 +5,7 @@ import { withRetry, RetryableError, NonRetryableError } from '../utils/retry';
 import { sanitizeUrl } from '../utils/sanitize-url';
 import { complianceService } from './compliance-service';
 import { secretProvider } from './secret-provider';
+import { EXTERNAL_SERVICE_POLICIES } from '../config/external-services';
 
 export interface EmailConfig {
   host?: string;
@@ -20,6 +21,7 @@ export interface EmailConfig {
 export class EmailService {
   private transporter: nodemailer.Transporter | null = null;
   private fromEmail: string;
+  private policy = EXTERNAL_SERVICE_POLICIES.gmail; // Default to gmail policy for email service
 
   constructor(config?: EmailConfig) {
     this.fromEmail = config?.from || process.env.EMAIL_FROM || 'noreply@synchro.app';
@@ -51,6 +53,9 @@ export class EmailService {
           user: process.env.SMTP_USER || '',
           pass: password,
         },
+        connectionTimeout: this.policy.timeoutMs,
+        greetingTimeout: this.policy.timeoutMs,
+        socketTimeout: this.policy.timeoutMs,
       });
     } else {
       logger.warn('Email service not fully configured. Using mock transporter.');
@@ -89,7 +94,7 @@ export class EmailService {
     payload: NotificationPayload,
     options: { maxAttempts?: number } = {}
   ): Promise<DeliveryResult> {
-    const { maxAttempts = 3 } = options;
+    const maxAttempts = options.maxAttempts || this.policy.retryPolicy.maxAttempts;
 
     try {
       return await withRetry(
@@ -128,7 +133,10 @@ export class EmailService {
             },
           };
         },
-        { maxAttempts }
+        {
+          ...this.policy.retryPolicy,
+          maxAttempts,
+        }
       );
     } catch (error) {
       const errorMessage =

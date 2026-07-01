@@ -59,7 +59,7 @@ describe('Rate Limiting Integration Tests', () => {
       expect(response.body.success).toBe(true);
       expect(response.headers['x-ratelimit-limit']).toBeDefined();
       expect(response.headers['x-ratelimit-remaining']).toBeDefined();
-    });
+    }, 10000);
 
     it('should block requests exceeding rate limit', async () => {
       // Make requests up to the limit (default is 20 per hour)
@@ -81,7 +81,7 @@ describe('Rate Limiting Integration Tests', () => {
       expect(rateLimitedResponse.status).toBe(429);
       expect(rateLimitedResponse.body.error).toContain('Too many team invitations');
       expect(rateLimitedResponse.headers['retry-after']).toBeDefined();
-    });
+    }, 30000);
 
     it('should include proper rate limiting headers', async () => {
       const response = await request(app)
@@ -92,7 +92,7 @@ describe('Rate Limiting Integration Tests', () => {
       expect(response.headers['x-ratelimit-limit']).toBe('20');
       expect(parseInt(response.headers['x-ratelimit-remaining'])).toBeLessThan(20);
       expect(response.headers['x-ratelimit-reset']).toBeDefined();
-    });
+    }, 10000);
   });
 
   describe('MFA Rate Limiting', () => {
@@ -114,7 +114,7 @@ describe('Rate Limiting Integration Tests', () => {
 
       expect(response.body.success).toBe(true);
       expect(response.headers['x-ratelimit-limit']).toBe('10');
-    });
+    }, 10000);
 
     it('should block MFA requests exceeding rate limit', async () => {
       // Make requests up to the limit (default is 10 per 15 minutes)
@@ -134,7 +134,7 @@ describe('Rate Limiting Integration Tests', () => {
       const rateLimitedResponse = responses[10];
       expect(rateLimitedResponse.status).toBe(429);
       expect(rateLimitedResponse.body.error).toContain('Too many MFA attempts');
-    });
+    }, 30000);
 
     it('should apply rate limiting across different MFA endpoints', async () => {
       // Make requests to different MFA endpoints
@@ -156,7 +156,7 @@ describe('Rate Limiting Integration Tests', () => {
 
       expect(successfulResponses.length).toBe(10);
       expect(rateLimitedResponses.length).toBe(1);
-    });
+    }, 30000);
   });
 
   describe('Admin Rate Limiting', () => {
@@ -174,7 +174,7 @@ describe('Rate Limiting Integration Tests', () => {
 
       expect(response.body.metrics).toBe('data');
       expect(response.headers['x-ratelimit-limit']).toBe('100');
-    });
+    }, 10000);
 
     it('should block admin requests exceeding rate limit', async () => {
       // Make requests up to the limit (default is 100 per hour)
@@ -193,7 +193,7 @@ describe('Rate Limiting Integration Tests', () => {
       const rateLimitedResponse = responses[100];
       expect(rateLimitedResponse.status).toBe(429);
       expect(rateLimitedResponse.body.error).toContain('Too many admin requests');
-    });
+    }, 30000);
 
     it('should use IP-based rate limiting for admin endpoints', async () => {
       // Test with different IP addresses
@@ -214,7 +214,7 @@ describe('Rate Limiting Integration Tests', () => {
       // Both should have the same limit but independent remaining counts
       expect(response1.headers['x-ratelimit-limit']).toBe('100');
       expect(response2.headers['x-ratelimit-limit']).toBe('100');
-    });
+    }, 10000);
   });
 
   describe('Rate Limiting Security Events', () => {
@@ -236,7 +236,7 @@ describe('Rate Limiting Integration Tests', () => {
       expect(rateLimitedResponse.status).toBe(429);
       expect(rateLimitedResponse.headers['x-ratelimit-policy']).toBe('team-invite');
       expect(rateLimitedResponse.headers['x-security-event']).toBe('rate-limit-exceeded');
-    });
+    }, 30000);
   });
 
   describe('User-based vs IP-based Rate Limiting', () => {

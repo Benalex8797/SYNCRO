@@ -17,14 +17,32 @@ module.exports = {
   ],
   rules: {
     "@typescript-eslint/no-explicit-any": "warn",
-    "@typescript-eslint/no-floating-promises": "warn",
+    "@typescript-eslint/no-floating-promises": "error",
     "no-console": "warn",
     "@typescript-eslint/no-unused-vars": "warn",
+    // Package boundary: backend must not import from client
+    "no-restricted-imports": [
+      "error",
+      {
+        patterns: [
+          {
+            group: ["../client/**", "../../client/**"],
+            message: "Backend must not import from client.",
+          },
+          {
+            group: ["../sdk/src/**", "../../sdk/src/**"],
+            message: "Import from the published @syncro/sdk package, not its source.",
+          },
+          {
+            group: ["../shared/src/**", "../../shared/src/**"],
+            message: "Import from @syncro/shared, not its source path.",
+          },
+        ],
+      },
+    ],
   },
   overrides: [
     {
-      // Plain JS/CJS files (scripts, config files) don't have a tsconfig —
-      // disable type-aware rules that require parserOptions.project.
       files: ["*.js", "*.cjs", "*.mjs"],
       parserOptions: {
         project: null,
@@ -34,6 +52,12 @@ module.exports = {
         "@typescript-eslint/no-explicit-any": "off",
         "@typescript-eslint/no-unused-vars": "off",
         "@typescript-eslint/no-require-imports": "off",
+      },
+    },
+    {
+      files: ["src/config/**/*.ts", "src/middleware/**/*.ts", "src/schemas/**/*.ts"],
+      rules: {
+        "@typescript-eslint/no-explicit-any": "error",
       },
     },
   ],

@@ -7,6 +7,7 @@ import { emailService } from '../services/email-service';
 import { createTeamInviteLimiter } from '../middleware/rate-limit-factory';
 import logger from '../config/logger';
 import { inviteTeamSchema, updateRoleSchema } from '../schemas/team';
+import { NotFoundError } from '../errors';
 
 const router: Router = Router();
 
@@ -478,6 +479,44 @@ router.delete('/:memberId', requireRole('owner', 'admin'), async (req: Authentic
   if (deleteErr) throw deleteErr;
 
   res.json({ success: true, message: 'Team member removed' });
+});
+
+// ---------------------------------------------------------------------------
+// PATCH /api/team/slack-webhook  — save Slack webhook URL (admin/owner only)
+// ---------------------------------------------------------------------------
+
+router.patch('/slack-webhook', requireRole('owner', 'admin'), async (req: AuthenticatedRequest, res: Response) => {
+  try {
+    const { slack_webhook_url } = req.body as { slack_webhook_url: string | null };
+
+    const ctx = await resolveUserTeam(req.user!.id);
+    if (!ctx) {
+      return res.status(404).json({ success: false, error: 'No team found' });
+    }
+    if (!canManageTeam(ctx)) {
+      return res.status(403).json({ success: false, error: 'Only admins can update the Slack webhook' });
+    }
+
+    // Basic URL validation
+    if (slack_webhook_url && !slack_webhook_url.startsWith('https://hooks.slack.com/')) {
+      return res.status(400).json({ success: false, error: 'Invalid Slack webhook URL' });
+    }
+
+    const { error } = await supabase
+      .from('teams')
+      .update({ slack_webhook_url: slack_webhook_url ?? null })
+      .eq('id', ctx.teamId);
+
+    if (error) throw error;
+
+    res.json({ success: true, message: 'Slack webhook updated' });
+  } catch (error) {
+    logger.error('PATCH /api/team/slack-webhook error:', error);
+    res.status(500).json({
+      success: false,
+      error: error instanceof Error ? error.message : 'Failed to update Slack webhook',
+    });
+  }
 });
 
 export default router;

@@ -1,14 +1,28 @@
 import { supabase } from '../config/database';
 import logger from '../config/logger';
+import {
+  buildCategoryMonthlySpend,
+  buildPastMonthlySpendTrend,
+  calculateMonthlySpend,
+  countUpcomingRenewals,
+  getTopMonthlySpendSubscriptions,
+  normalizeToMonthlyAmount,
+  roundMoney,
+} from '@syncro/shared/subscription-math';
 import { AnalyticsSummary, MonthlySpend, CategorySpend, SubscriptionSpend, Budget } from '../types/analytics';
 import { Subscription } from '../types/reminder';
-import { riskNotificationService } from './risk-detection/risk-notification-service';
+import { queryCacheService } from './query-cache-service';
 
 export class AnalyticsService {
   /**
    * Get analytics summary for a user
    */
   async getSummary(userId: string): Promise<AnalyticsSummary> {
+    const cached = await queryCacheService.get<AnalyticsSummary>(userId, 'analytics_summary', { type: 'summary' });
+    if (cached) {
+      return cached;
+    }
+
     try {
       // 1. Fetch active subscriptions
       const { data: subscriptions, error: subError } = await supabase
@@ -27,13 +41,22 @@ export class AnalyticsService {
 
       if (budgetError) throw budgetError;
 
+      // Get suggestions to calculate potential savings
+      const { data: suggestions, error: suggestionError } = await supabase
+        .from('suggestions')
+        .select('savings_per_year')
+        .eq('user_id', userId)
+        .eq('dismissed_until', null);
+
+      if (suggestionError) throw suggestionError;
+
       const typedSubs = (subscriptions || []) as Subscription[];
       const typedBudgets = (budgets || []) as Budget[];
 
       // 3. Calculate metrics
-      const totalMonthlySpend = this.calculateTotalMonthlySpend(typedSubs);
-      const categoryBreakdown = this.calculateCategoryBreakdown(typedSubs, totalMonthlySpend);
-      const topSubscriptions = this.getTopSubscriptions(typedSubs);
+      const totalMonthlySpend = calculateMonthlySpend(typedSubs);
+      const categoryBreakdown = this.formatCategoryBreakdown(typedSubs);
+      const topSubscriptions = this.formatTopSubscriptions(typedSubs);
       const monthlyTrend = await this.getMonthlyTrend(userId, typedSubs);
       
       const overallBudget = typedBudgets.find(b => b.category === null);
@@ -43,96 +66,54 @@ export class AnalyticsService {
         percentage: overallBudget ? (totalMonthlySpend / overallBudget.budget_limit) * 100 : 0
       };
 
-      // 4. Upcoming renewals count (next 7 days)
-      const next7Days = new Date();
-      next7Days.setDate(next7Days.getDate() + 7);
-      const upcomingRenewalsCount = typedSubs.filter(sub => {
-        if (!sub.next_billing_date) return false;
-        const renewalDate = new Date(sub.next_billing_date);
-        return renewalDate <= next7Days && renewalDate >= new Date();
-      }).length;
+      const upcomingRenewalsCount = countUpcomingRenewals(typedSubs, 7);
+      const potentialSavingsMonthly = (suggestions || [])
+        .filter(s => s.savings_per_year)
+        .reduce((sum, s) => sum + (s.savings_per_year || 0) / 12, 0);
 
-      return {
+      const summary = {
         total_monthly_spend: totalMonthlySpend,
         active_subscriptions: typedSubs.length,
         upcoming_renewals_count: upcomingRenewalsCount,
         monthly_trend: monthlyTrend,
         category_breakdown: categoryBreakdown,
         top_subscriptions: topSubscriptions,
-        budget_status: budgetStatus
+        budget_status: budgetStatus,
+        potential_savings_monthly: parseFloat(potentialSavingsMonthly.toFixed(2))
       };
+
+      await queryCacheService.set(
+        userId,
+        'analytics_summary',
+        { type: 'summary' },
+        summary,
+        queryCacheService.getDefaultAnalyticsTtl(),
+      );
+
+      return summary;
     } catch (error) {
       logger.error('Error fetching analytics summary:', error);
       throw error;
     }
   }
 
-  /**
-   * Calculate monthly normalized spend
-   */
-  private calculateTotalMonthlySpend(subscriptions: Subscription[]): number {
-    return subscriptions.reduce((total, sub) => {
-      return total + this.normalizeToMonthly(sub.price, sub.billing_cycle);
-    }, 0);
+  private formatCategoryBreakdown(subscriptions: Subscription[]): CategorySpend[] {
+    return buildCategoryMonthlySpend(subscriptions).map((category) => ({
+      category: category.category,
+      total_spend: category.totalMonthlySpend,
+      percentage: category.percentage,
+      count: category.count,
+    }));
   }
 
-  /**
-   * Normalize price to monthly
-   */
-  private normalizeToMonthly(price: number, cycle: string): number {
-    switch (cycle.toLowerCase()) {
-      case 'annual':
-      case 'yearly':
-        return price / 12;
-      case 'monthly':
-        return price;
-      case 'weekly':
-        return price * (365 / 7 / 12); // Average weeks in a month
-      case 'quarterly':
-        return price / 3;
-      case 'semiannual':
-        return price / 6;
-      default:
-        return price;
-    }
-  }
-
-  /**
-   * Calculate spend by category
-   */
-  private calculateCategoryBreakdown(subscriptions: Subscription[], totalSpend: number): CategorySpend[] {
-    const categories: Record<string, { total: number, count: number }> = {};
-    
-    subscriptions.forEach(sub => {
-      const category = sub.category || 'Other';
-      if (!categories[category]) {
-        categories[category] = { total: 0, count: 0 };
-      }
-      categories[category].total += this.normalizeToMonthly(sub.price, sub.billing_cycle);
-      categories[category].count += 1;
-    });
-
-    return Object.entries(categories).map(([name, data]) => ({
-      category: name,
-      total_spend: parseFloat(data.total.toFixed(2)),
-      percentage: totalSpend > 0 ? (data.total / totalSpend) * 100 : 0,
-      count: data.count
-    })).sort((a, b) => b.total_spend - a.total_spend);
-  }
-
-  /**
-   * Get top 5 expensive subscriptions (monthly normalized)
-   */
-  private getTopSubscriptions(subscriptions: Subscription[]): SubscriptionSpend[] {
-    return subscriptions.map(sub => ({
-      id: sub.id,
-      name: sub.name,
-      price: sub.price,
-      billing_cycle: sub.billing_cycle,
-      monthly_normalized_price: this.normalizeToMonthly(sub.price, sub.billing_cycle)
-    }))
-    .sort((a, b) => b.monthly_normalized_price - a.monthly_normalized_price)
-    .slice(0, 5);
+  private formatTopSubscriptions(subscriptions: Subscription[]): SubscriptionSpend[] {
+    return getTopMonthlySpendSubscriptions(subscriptions).map((subscription) => ({
+      id: subscription.id ? String(subscription.id) : '',
+      name: subscription.name ?? '',
+      price: subscription.price,
+      billing_cycle: subscription.billing_cycle,
+      monthly_normalized_price: subscription.monthlyNormalizedPrice,
+    }));
   }
 
   /**
@@ -141,31 +122,11 @@ export class AnalyticsService {
   private async getMonthlyTrend(userId: string, currentSubs: Subscription[]): Promise<MonthlySpend[]> {
     // In a real app, this would query historical data or logs.
     // For now, we'll project the trend based on current subscriptions and created_at dates
-    const trend: MonthlySpend[] = [];
-    const now = new Date();
-    
-    for (let i = 5; i >= 0; i--) {
-      const targetDate = new Date(now.getFullYear(), now.getMonth() - i, 1);
-      const monthStr = targetDate.toISOString().substring(0, 7);
-      
-      // Filter subs that existed in this month
-      const subsAtTime = currentSubs.filter(sub => {
-        const createdAt = new Date(sub.created_at);
-        return createdAt <= new Date(targetDate.getFullYear(), targetDate.getMonth() + 1, 0);
-      });
-
-      const monthlyTotal = subsAtTime.reduce((total, sub) => {
-        return total + this.normalizeToMonthly(sub.price, sub.billing_cycle);
-      }, 0);
-
-      trend.push({
-        month: monthStr,
-        total_spend: parseFloat(monthlyTotal.toFixed(2)),
-        count: subsAtTime.length
-      });
-    }
-
-    return trend;
+    return buildPastMonthlySpendTrend(currentSubs).map((point) => ({
+      month: point.month,
+      total_spend: point.totalMonthlySpend,
+      count: point.count,
+    }));
   }
 
   /**
@@ -196,6 +157,8 @@ export class AnalyticsService {
       logger.error('Error upserting budget:', error);
       throw error;
     }
+
+    await queryCacheService.invalidateUserNamespace(userId, 'analytics_summary');
 
     return data;
   }
@@ -244,6 +207,88 @@ export class AnalyticsService {
       }
     } catch (error) {
       logger.error('Error checking budget threshold:', error);
+    }
+  }
+
+  /**
+   * Get spending trends for the user
+   */
+  async getSpending(userId: string) {
+    try {
+      const { data: subscriptions, error: subError } = await supabase
+        .from('subscriptions')
+        .select('*')
+        .eq('user_id', userId);
+
+      if (subError) throw subError;
+
+      const typedSubs = (subscriptions || []) as Subscription[];
+      const monthlyTrend = await this.getMonthlyTrend(userId, typedSubs);
+      const categoryBreakdown = this.formatCategoryBreakdown(typedSubs);
+
+      return {
+        current_month_spend: calculateMonthlySpend(typedSubs),
+        monthly_trend: monthlyTrend,
+        category_breakdown: categoryBreakdown,
+        active_subscriptions: typedSubs.length
+      };
+    } catch (error) {
+      logger.error('Error fetching spending data:', error);
+      throw error;
+    }
+  }
+
+  /**
+   * Get spending forecast for the next 6 months
+   */
+  async getForecast(userId: string) {
+    try {
+      const { data: subscriptions, error: subError } = await supabase
+        .from('subscriptions')
+        .select('*')
+        .eq('user_id', userId)
+        .eq('status', 'active');
+
+      if (subError) throw subError;
+
+      const typedSubs = (subscriptions || []) as Subscription[];
+      const forecast: MonthlySpend[] = [];
+      const now = new Date();
+
+      // Generate forecast for next 6 months
+      for (let i = 0; i < 6; i++) {
+        const targetDate = new Date(now.getFullYear(), now.getMonth() + i, 1);
+        const monthStr = targetDate.toISOString().substring(0, 7);
+        
+        let monthlyTotal = 0;
+        let count = 0;
+
+        // Calculate spend for each active subscription in this month
+        for (const sub of typedSubs) {
+          const createdAt = new Date(sub.created_at);
+          const nextBillingDate = sub.next_billing_date ? new Date(sub.next_billing_date) : createdAt;
+          
+          // Check if subscription will be active in this month
+          if (createdAt <= new Date(targetDate.getFullYear(), targetDate.getMonth() + 1, 0)) {
+            monthlyTotal += normalizeToMonthlyAmount(sub.price, sub.billing_cycle);
+            count++;
+          }
+        }
+
+        forecast.push({
+          month: monthStr,
+          total_spend: roundMoney(monthlyTotal),
+          count: count
+        });
+      }
+
+      return {
+        forecast,
+        avg_projected_monthly_spend: parseFloat((forecast.reduce((sum, m) => sum + m.total_spend, 0) / forecast.length).toFixed(2))
+      };
+    } catch (error) {
+      logger.error('Error fetching forecast data:', error);
+      throw error;
     }
   }
 }

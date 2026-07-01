@@ -64,6 +64,7 @@ function createMockProvider(
 
 describe('ExchangeRateService', () => {
   let fiatProvider: ExchangeRateProvider;
+  let frankfurterProvider: ExchangeRateProvider;
   let cryptoProvider: ExchangeRateProvider;
   let service: ExchangeRateService;
 
@@ -73,12 +74,17 @@ describe('ExchangeRateService', () => {
       ['USD', 'EUR', 'NGN'],
       { USD: 1, EUR: 0.92, GBP: 0.79, NGN: 1520 }
     );
+    frankfurterProvider = createMockProvider(
+      'Frankfurter',
+      ['USD', 'EUR', 'NGN'],
+      { USD: 1, EUR: 0.91, GBP: 0.78, NGN: 1510 }
+    );
     cryptoProvider = createMockProvider(
       'crypto',
       ['XLM', 'USDC'],
       { XLM: 8.5, USDC: 1 }
     );
-    service = new ExchangeRateService([fiatProvider, cryptoProvider]);
+    service = new ExchangeRateService([fiatProvider, frankfurterProvider, cryptoProvider]);
   });
 
   it('returns combined fiat and crypto rates', async () => {
@@ -106,32 +112,113 @@ describe('ExchangeRateService', () => {
     expect(result).toBeCloseTo(1652.17, 0);
   });
 
-  it('returns stale cache when provider fails', async () => {
+  it('falls back to Frankfurter when primary fiat provider fails', async () => {
+    (fiatProvider.getRates as jest.Mock).mockRejectedValueOnce(new Error('ExchangeRate-API down'));
+
+    const rates = await service.getRates('USD');
+
+    // Frankfurter rates should be used for fiat; crypto still comes from CoinGecko mock
+    expect(rates.EUR).toBe(0.91);
+    expect(rates.XLM).toBe(8.5);
+    expect(frankfurterProvider.getRates).toHaveBeenCalledTimes(1);
+  });
+
+  it('returns stale cache when all providers fail', async () => {
     // First call succeeds and populates cache
     await service.getRates('USD');
 
-    // Second call: provider throws
+    // All providers throw on the next attempt
     (fiatProvider.getRates as jest.Mock).mockRejectedValueOnce(new Error('API down'));
+    (frankfurterProvider.getRates as jest.Mock).mockRejectedValueOnce(new Error('API down'));
     (cryptoProvider.getRates as jest.Mock).mockRejectedValueOnce(new Error('API down'));
 
-    // Force cache expiry by manipulating internal state
+    // Force cache expiry
     service.expireCacheForTesting('USD');
 
     const rates = await service.getRates('USD');
-    expect(rates.EUR).toBe(0.92); // stale cached value
+    expect(rates.EUR).toBe(0.92); // stale cached value from first call
   });
 
-  it('returns static fallback when no cache exists and provider fails', async () => {
+  it('returns static fallback when no cache exists and all providers fail', async () => {
     const failProvider = createMockProvider('fail', ['USD', 'EUR'], {});
     (failProvider.getRates as jest.Mock).mockRejectedValue(new Error('API down'));
+    const failFrankfurter = createMockProvider('failFrankfurter', ['USD', 'EUR'], {});
+    (failFrankfurter.getRates as jest.Mock).mockRejectedValue(new Error('API down'));
     const failCryptoProvider = createMockProvider('failCrypto', ['XLM'], {});
     (failCryptoProvider.getRates as jest.Mock).mockRejectedValue(new Error('API down'));
 
-    const failService = new ExchangeRateService([failProvider, failCryptoProvider]);
+    const failService = new ExchangeRateService([failProvider, failFrankfurter, failCryptoProvider]);
     const rates = await failService.getRates('USD');
 
     // Should return static fallback rates
     expect(rates.EUR).toBe(0.92);
     expect(rates.XLM).toBe(8.5);
+  });
+
+  describe('getExchangeRateResponse', () => {
+    it('returns source=live on a fresh fetch', async () => {
+      const response = await service.getExchangeRateResponse('USD');
+      expect(response.stale).toBe(false);
+      expect(response.source).toBe('live');
+    });
+
+    it('returns source=stale-cache when all providers fail but cache exists', async () => {
+      // Populate cache
+      await service.getRates('USD');
+      service.expireCacheForTesting('USD');
+
+      (fiatProvider.getRates as jest.Mock).mockRejectedValueOnce(new Error('down'));
+      (frankfurterProvider.getRates as jest.Mock).mockRejectedValueOnce(new Error('down'));
+      (cryptoProvider.getRates as jest.Mock).mockRejectedValueOnce(new Error('down'));
+
+      const response = await service.getExchangeRateResponse('USD');
+      expect(response.stale).toBe(true);
+      expect(response.source).toBe('stale-cache');
+    });
+
+    it('returns source=static-fallback when all providers fail and no cache exists', async () => {
+      const failProvider = createMockProvider('fail', ['USD'], {});
+      (failProvider.getRates as jest.Mock).mockRejectedValue(new Error('down'));
+      const failFrankfurter = createMockProvider('failF', ['USD'], {});
+      (failFrankfurter.getRates as jest.Mock).mockRejectedValue(new Error('down'));
+      const failCrypto = createMockProvider('failC', ['XLM'], {});
+      (failCrypto.getRates as jest.Mock).mockRejectedValue(new Error('down'));
+
+      const failService = new ExchangeRateService([failProvider, failFrankfurter, failCrypto]);
+      const response = await failService.getExchangeRateResponse('USD');
+
+      expect(response.stale).toBe(true);
+      expect(response.source).toBe('static-fallback');
+    });
+
+    it('returns source=live on a cache hit within TTL', async () => {
+      // First call populates cache
+      await service.getExchangeRateResponse('USD');
+      // Second call should hit cache
+      const response = await service.getExchangeRateResponse('USD');
+      expect(response.stale).toBe(false);
+      expect(response.source).toBe('live');
+      // Providers called only once (cache hit on second call)
+      expect(fiatProvider.getRates).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  describe('configurable TTL', () => {
+    it('respects a custom TTL passed to the constructor', async () => {
+      const shortTtlService = new ExchangeRateService(
+        [fiatProvider, frankfurterProvider, cryptoProvider],
+        100 // 100 ms TTL
+      );
+
+      await shortTtlService.getRates('USD');
+      expect(fiatProvider.getRates).toHaveBeenCalledTimes(1);
+
+      // Wait for TTL to expire
+      await new Promise((resolve) => setTimeout(resolve, 150));
+
+      await shortTtlService.getRates('USD');
+      // Should have re-fetched after TTL expired
+      expect(fiatProvider.getRates).toHaveBeenCalledTimes(2);
+    });
   });
 });

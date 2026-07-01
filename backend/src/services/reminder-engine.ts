@@ -2,6 +2,7 @@ import logger from '../config/logger';
 import { supabase } from '../config/database';
 import { emailService } from './email-service';
 import { pushService, PushSubscription } from './push-service';
+import { slackService } from './slack-service';
 import { blockchainService } from './blockchain-service';
 import {
   ReminderSchedule,
@@ -10,278 +11,270 @@ import {
   NotificationPayload,
   NotificationDelivery,
 } from '../types/reminder';
+import { subDays } from 'date-fns';
 import { calculateBackoffDelay } from '../utils/retry';
 import { userPreferenceService } from './user-preference-service';
 import { notificationPreferenceService } from './notification-preference-service';
-import { quietHoursService } from './quiet-hours-service';
-import { delayedNotificationService } from './delayed-notification-service';
+import { telegramBotService } from './telegram-bot-service';
 
 export interface ReminderEngineOptions {
   defaultDaysBefore?: number[];
   maxRetryAttempts?: number;
 }
 
+type DeliveryStatus = 'sent' | 'failed' | 'retrying';
+
 export class ReminderEngine {
-  private defaultDaysBefore: number[];
-  private maxRetryAttempts: number;
+  private readonly defaultDaysBefore: number[];
+  private readonly maxRetryAttempts: number;
 
   constructor(options: ReminderEngineOptions = {}) {
     this.defaultDaysBefore = options.defaultDaysBefore || [7, 3, 1];
     this.maxRetryAttempts = options.maxRetryAttempts || 3;
   }
 
-  // ---------------------------------------------------------------------------
-  // Public methods
-  // ---------------------------------------------------------------------------
-
-  /**
-   * Process pending reminders for a given date
-   */
   async processReminders(targetDate: Date = new Date()): Promise<void> {
     const dateString = targetDate.toISOString().split('T')[0];
-
     logger.info(`Processing reminders for date: ${dateString}`);
 
-    try {
-      const { data: reminders, error } = await supabase
-        .from('reminder_schedules')
-        .select('*')
-        .eq('reminder_date', dateString)
-        .eq('status', 'pending');
+    const { data: reminders, error } = await supabase
+      .from('reminder_schedules')
+      .select('*')
+      .eq('reminder_date', dateString)
+      .eq('status', 'pending');
 
-      if (error) {
-        logger.error('Failed to fetch reminders:', error);
-        throw error;
-      }
-
-      if (!reminders || reminders.length === 0) {
-        logger.info(`No pending reminders found for ${dateString}`);
-        return;
-      }
-
-      logger.info(`Found ${reminders.length} reminders to process`);
-
-      for (const reminder of reminders) {
-        try {
-          await this.processReminder(reminder);
-        } catch (error) {
-          logger.error(`Failed to process reminder ${reminder.id}:`, error);
-        }
-      }
-    } catch (error) {
-      logger.error('Error processing reminders:', error);
+    if (error) {
+      logger.error('Failed to fetch reminders:', error);
       throw error;
     }
-  }
 
-  /**
-   * Process delayed notifications that are ready to be sent
-   */
-  async processDelayedNotifications(): Promise<void> {
-    logger.info('Processing delayed notifications');
-
-    try {
-      const delayedNotifications = await delayedNotificationService.getPendingDelayedNotifications();
-
-      if (delayedNotifications.length === 0) {
-        logger.info('No delayed notifications ready to be sent');
-        return;
-      }
-
-      logger.info(`Found ${delayedNotifications.length} delayed notifications to process`);
-
-      for (const delayedNotification of delayedNotifications) {
-        try {
-          // Check if it's an appropriate time to send delayed notifications
-          const userPreferences = await userPreferenceService.getPreferences(delayedNotification.user_id);
-          
-          if (!quietHoursService.isAppropriateTimeForDelayedNotifications(userPreferences)) {
-            logger.debug(`Skipping delayed notification ${delayedNotification.id} - not appropriate time`);
-            continue;
-          }
-
-          // Send the delayed notification
-          await this.sendDelayedNotification(delayedNotification);
-          
-          // Mark as sent
-          await delayedNotificationService.markDelayedNotificationAsSent(delayedNotification.id);
-          
-          logger.info(`Delayed notification ${delayedNotification.id} sent successfully`);
-        } catch (error) {
-          logger.error(`Failed to process delayed notification ${delayedNotification.id}:`, error);
-        }
-      }
-    } catch (error) {
-      logger.error('Error processing delayed notifications:', error);
-      throw error;
-    }
-  }
-
-  /**
-   * Send a delayed notification
-   */
-  private async sendDelayedNotification(delayedNotification: any): Promise<void> {
-    const payload = delayedNotification.notification_payload;
-    const userPreferences = await userPreferenceService.getPreferences(delayedNotification.user_id);
-    
-    // Get user profile for email
-    const userProfile = await this.getUserProfile(delayedNotification.user_id);
-    if (!userProfile) {
-      throw new Error('User profile not found');
+    if (!reminders || reminders.length === 0) {
+      logger.info(`No pending reminders found for ${dateString}`);
+      return;
     }
 
-    const deliveryChannels = userPreferences.notification_channels;
-
-    // Email delivery
-    if (deliveryChannels.includes('email') && userPreferences.email_opt_ins.reminders) {
-      await emailService.sendReminderEmail(userProfile.email, payload, { maxAttempts: 1 });
-    }
-
-    // Push delivery
-    if (deliveryChannels.includes('push')) {
-      const pushSubscription = await this.getPushSubscription(delayedNotification.user_id);
-      if (pushSubscription) {
-        await pushService.sendPushNotification(pushSubscription, payload, { maxAttempts: 1 });
+    for (const reminder of reminders) {
+      try {
+        await this.processReminder(reminder as ReminderSchedule);
+      } catch (processError) {
+        logger.error(`Failed to process reminder ${reminder.id}:`, processError);
       }
     }
   }
 
-  /**
-   * Process failed deliveries that need retry
-   */
   async processRetries(): Promise<void> {
     const now = new Date().toISOString();
-
     logger.info('Processing delivery retries');
 
-    try {
-      const { data: deliveries, error } = await supabase
-        .from('notification_deliveries')
-        .select('*, reminder_schedules!inner(*)')
-        .eq('status', 'retrying')
-        .lte('next_retry_at', now)
-        .lt('attempt_count', this.maxRetryAttempts);
+    const { data: deliveries, error } = await supabase
+      .from('notification_deliveries')
+      .select('*, reminder_schedules!inner(*)')
+      .eq('status', 'retrying')
+      .lte('next_retry_at', now)
+      .lt('attempt_count', this.maxRetryAttempts);
 
-      if (error) {
-        logger.error('Failed to fetch retry deliveries:', error);
-        throw error;
-      }
-
-      if (!deliveries || deliveries.length === 0) {
-        logger.info('No deliveries need retry');
-        return;
-      }
-
-      logger.info(`Found ${deliveries.length} deliveries to retry`);
-
-      for (const delivery of deliveries) {
-        try {
-          await this.retryDelivery(
-            delivery as NotificationDelivery & { reminder_schedules: ReminderSchedule },
-          );
-        } catch (error) {
-          logger.error(`Failed to retry delivery ${delivery.id}:`, error);
-        }
-      }
-    } catch (error) {
-      logger.error('Error processing retries:', error);
+    if (error) {
+      logger.error('Failed to fetch retry deliveries:', error);
       throw error;
+    }
+
+    if (!deliveries || deliveries.length === 0) {
+      logger.info('No deliveries need retry');
+      return;
+    }
+
+    for (const delivery of deliveries) {
+      try {
+        await this.retryDelivery(
+          delivery as NotificationDelivery & { reminder_schedules: ReminderSchedule },
+        );
+      } catch (retryError) {
+        logger.error(`Failed to retry delivery ${delivery.id}:`, retryError);
+      }
     }
   }
 
-  /**
-   * Schedule reminders for subscriptions with upcoming renewals.
-   * Respects per-subscription notification preferences with fallback
-   * to user global settings and engine defaults.
-   */
   async scheduleReminders(daysBefore: number[] = this.defaultDaysBefore): Promise<void> {
+    const start = Date.now();
     logger.info(`Scheduling reminders, engine defaults: ${daysBefore.join(', ')}`);
 
-    try {
-      const { data: subscriptions, error } = await supabase
-        .from('subscriptions')
-        .select('*')
-        .eq('status', 'active')
-        .not('active_until', 'is', null)
-        .gt('active_until', new Date().toISOString());
+    const { data: subscriptions, error } = await supabase
+      .from('subscriptions')
+      .select('*')
+      .eq('status', 'active')
+      .not('active_until', 'is', null)
+      .gt('active_until', new Date().toISOString());
 
-      if (error) {
-        logger.error('Failed to fetch subscriptions:', error);
-        throw error;
+    if (error) {
+      logger.error('Failed to fetch subscriptions:', error);
+      throw error;
+    }
+
+    const rows: Array<Record<string, unknown>> = [];
+    const activeSubscriptions = (subscriptions ?? []) as Subscription[];
+
+    if (activeSubscriptions.length === 0) {
+      logger.info('No active subscriptions with future renewal dates');
+      return;
+    }
+
+    const userIds = Array.from(new Set(activeSubscriptions.map((sub) => sub.user_id)));
+    const { data: preferences, error: preferencesError } = await supabase
+      .from('user_preferences')
+      .select('*')
+      .in('user_id', userIds);
+
+    if (preferencesError) {
+      logger.error('Failed to fetch user preferences:', preferencesError);
+      throw preferencesError;
+    }
+
+    const prefsByUser = new Map<string, { reminder_timing?: number[]; reminder_jitter_level?: string }>();
+    (preferences ?? []).forEach((pref: { user_id: string; reminder_timing?: number[]; reminder_jitter_level?: string }) => {
+      prefsByUser.set(pref.user_id, pref);
+    });
+
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+
+    const jitterLevels: Record<string, number> = {
+      off: 0,
+      low: 2,
+      medium: 6,
+      high: 12
+    };
+
+    for (const subscription of activeSubscriptions) {
+      const userPref = prefsByUser.get(subscription.user_id);
+      const timing = userPref?.reminder_timing ?? daysBefore;
+      const jitterLevel = userPref?.reminder_jitter_level ?? 'off';
+      const maxJitter = jitterLevels[jitterLevel] || 0;
+      const renewalDate = new Date(subscription.active_until as string);
+
+      for (const day of timing) {
+        // Calculate base reminder date
+        let reminderDate = subDays(renewalDate, day);
+        reminderDate.setHours(0, 0, 0, 0);
+
+        let jitterOffsetHours = 0;
+        if (maxJitter > 0) {
+          // Generate random jitter between -maxJitter and +maxJitter
+          jitterOffsetHours = (Math.random() * 2 * maxJitter) - maxJitter;
+          // Apply jitter
+          reminderDate = new Date(reminderDate.getTime() + jitterOffsetHours * 60 * 60 * 1000);
+          // Ensure reminder is not after renewal date
+          if (reminderDate > renewalDate) {
+            reminderDate = new Date(renewalDate);
+            // Recalculate offset to be the maximum possible before renewal
+            jitterOffsetHours = (renewalDate.getTime() - subDays(renewalDate, day).setHours(0,0,0,0)) / (60*60*1000);
+          }
+        }
+
+        if (reminderDate >= today) {
+          rows.push({
+            subscription_id: subscription.id,
+            user_id: subscription.user_id,
+            reminder_date: reminderDate.toISOString().split('T')[0],
+            reminder_type: 'renewal',
+            days_before: day,
+            jitter_offset_hours: maxJitter > 0 ? jitterOffsetHours : null,
+            status: 'pending',
+            created_at: new Date().toISOString(),
+            updated_at: new Date().toISOString(),
+          });
+        }
       }
+    }
 
-      if (!subscriptions || subscriptions.length === 0) {
-        logger.info('No active subscriptions with future renewal dates');
-        return;
+    if (rows.length > 0) {
+      const { error: upsertError } = await supabase
+        .from('reminder_schedules')
+        .upsert(rows, { onConflict: 'subscription_id,reminder_date' });
+
+      if (upsertError) {
+        logger.error('Failed to upsert reminder schedules:', upsertError);
+        throw upsertError;
       }
+    }
 
-      logger.info(`Found ${subscriptions.length} subscriptions to schedule reminders for`);
+    logger.info(`Reminder scheduling completed in ${Date.now() - start}ms`);
+  }
 
-      for (const subscription of subscriptions) {
-        if (!subscription.active_until) continue;
+  async scheduleTrialReminders(): Promise<void> {
+    logger.info('Scheduling trial reminders');
 
-        // Resolve preferences: per-subscription → user global → engine default
-        const resolvedPrefs = await this.getNotificationPreferences(
-          subscription.id,
-          subscription.user_id,
-        );
+    const { data: trials, error } = await supabase
+      .from('subscriptions')
+      .select('*')
+      .eq('is_trial', true)
+      .eq('status', 'active')
+      .not('trial_ends_at', 'is', null)
+      .gt('trial_ends_at', new Date().toISOString());
 
-        // Skip entirely if muted or snoozed
-        if (resolvedPrefs.muted) {
-          logger.debug(`Skipping reminders for muted subscription ${subscription.id}`);
+    if (error) {
+      logger.error('Failed to fetch trial subscriptions:', error);
+      throw error;
+    }
+
+    if (!trials || trials.length === 0) {
+      logger.info('No active trials to schedule reminders for');
+      return;
+    }
+
+    const trialSubscriptions = trials as Subscription[];
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+
+    for (const subscription of trialSubscriptions) {
+      const trialEnd = new Date(subscription.trial_ends_at as string);
+      const reminderWindows = subscription.credit_card_required
+        ? [14, 7, 3, 1, 0]
+        : [7, 3, 1, 0];
+
+      for (const day of reminderWindows) {
+        const reminderDate = subDays(trialEnd, day);
+        reminderDate.setHours(0, 0, 0, 0);
+
+        if (reminderDate < today) {
           continue;
         }
 
-        const renewalDate = new Date(subscription.active_until);
-        const today = new Date();
-        today.setHours(0, 0, 0, 0);
+        const { data: existing } = await supabase
+          .from('reminder_schedules')
+          .select('id')
+          .eq('subscription_id', subscription.id)
+          .eq('reminder_type', 'trial_expiry')
+          .eq('days_before', day)
+          .eq('status', 'pending')
+          .single();
 
-        for (const days of resolvedPrefs.reminder_days_before) {
-          const reminderDate = new Date(renewalDate);
-          reminderDate.setDate(reminderDate.getDate() - days);
-          reminderDate.setHours(0, 0, 0, 0);
+        if (existing) {
+          continue;
+        }
 
-          if (reminderDate >= today) {
-            const { data: existing } = await supabase
-              .from('reminder_schedules')
-              .select('id')
-              .eq('subscription_id', subscription.id)
-              .eq('days_before', days)
-              .eq('status', 'pending')
-              .single();
+        const { error: insertError } = await supabase.from('reminder_schedules').insert({
+          subscription_id: subscription.id,
+          user_id: subscription.user_id,
+          reminder_date: reminderDate.toISOString().split('T')[0],
+          reminder_type: 'trial_expiry',
+          days_before: day,
+          status: 'pending',
+        });
 
-            if (!existing) {
-              await supabase.from('reminder_schedules').insert({
-                subscription_id: subscription.id,
-                user_id: subscription.user_id,
-                reminder_date: reminderDate.toISOString().split('T')[0],
-                reminder_type: 'renewal',
-                days_before: days,
-                status: 'pending',
-              });
-
-              logger.debug(
-                `Scheduled reminder for subscription ${subscription.id} (${days} days before)`,
-              );
-            }
-          }
+        if (insertError) {
+          logger.error('Failed to insert trial reminder schedule:', insertError);
+          throw insertError;
         }
       }
-
-      logger.info('Reminder scheduling completed');
-    } catch (error) {
-      logger.error('Error scheduling reminders:', error);
-      throw error;
     }
+
+    logger.info('Trial reminder scheduling completed');
   }
 
-  // ---------------------------------------------------------------------------
-  // Private methods
-  // ---------------------------------------------------------------------------
+  async processDelayedNotifications(): Promise<void> {
+    logger.info('ReminderEngine.processDelayedNotifications noop');
+  }
 
-  /**
-   * Process a single reminder
-   */
   private async processReminder(reminder: ReminderSchedule): Promise<void> {
     logger.info(`Processing reminder ${reminder.id} for subscription ${reminder.subscription_id}`);
 
@@ -294,142 +287,155 @@ export class ReminderEngine {
       }
 
       if (subscription.status === 'paused') {
-        logger.info(`Skipping reminder ${reminder.id} — subscription ${reminder.subscription_id} is paused`);
+        logger.info(`Skipping reminder ${reminder.id} because subscription is paused`);
         await this.markReminderAsFailed(reminder.id, 'Subscription is paused');
         return;
       }
 
+    const userPreferences = await userPreferenceService.getPreferences(reminder.user_id);
+    const deliveryChannels = userPreferences.notification_channels ?? ['email'];
+    const renewalDate = reminder.reminder_type === 'trial_expiry'
+      ? (subscription.trial_ends_at || new Date().toISOString())
+      : (subscription.active_until || new Date().toISOString());
+    const payload: NotificationPayload = {
+      title: `${subscription.name} Renewal Reminder`,
+      body: `${subscription.name} will renew in ${reminder.days_before} day${reminder.days_before === 1 ? '' : 's'}`,
+      subscription,
+      reminderType: reminder.reminder_type,
+      daysBefore: reminder.days_before,
+      renewalDate,
+    };
+
+    const deliveries: NotificationDelivery[] = [];
+
+    if (deliveryChannels.includes('email') && userPreferences.email_opt_ins.reminders) {
+      const emailDelivery = await this.createDeliveryRecord(reminder.id, reminder.user_id, 'email');
+      deliveries.push(emailDelivery);
+
       const userProfile = await this.getUserProfile(reminder.user_id);
-      if (!userProfile) {
-        logger.warn(`User profile ${reminder.user_id} not found`);
-        await this.markReminderAsFailed(reminder.id, 'User profile not found');
-        return;
-      }
-
-      const renewalDate = reminder.reminder_type === 'trial_expiry'
-        ? (subscription.trial_ends_at || new Date().toISOString())
-        : (subscription.active_until || new Date().toISOString());
-      const payload: NotificationPayload = {
-        title: `${subscription.name} Renewal Reminder`,
-        body: `${subscription.name} will renew in ${reminder.days_before} day${reminder.days_before > 1 ? 's' : ''}`,
-        subscription,
-        reminderType: reminder.reminder_type,
-        daysBefore: reminder.days_before,
-        renewalDate,
-      };
-
-      // Determine notification priority
-      payload.priority = quietHoursService.determineNotificationPriority(payload);
-
-      const preferences = await userPreferenceService.getPreferences(reminder.user_id);
-      
-      // Check quiet hours
-      const quietHoursCheck = quietHoursService.shouldSendDuringQuietHours(preferences, payload);
-      
-      if (quietHoursCheck.shouldDelay) {
-        // Store notification for later delivery
-        await delayedNotificationService.storeDelayedNotification(
-          reminder.user_id,
-          reminder.id,
-          payload,
-          quietHoursCheck.delayUntil!,
-          payload.priority!,
-          quietHoursCheck.reason
+      if (!userProfile?.email) {
+        emailDelivery.status = 'failed';
+        await this.updateDeliveryRecord(
+          emailDelivery.id,
+          'failed',
+          'User email not found',
+          { retryable: false },
         );
-        
-        // Mark reminder as sent (it's scheduled for later)
-        await supabase
-          .from('reminder_schedules')
-          .update({
-            status: 'sent',
-            updated_at: new Date().toISOString(),
-          })
-          .eq('id', reminder.id);
-          
-        logger.info(`Reminder ${reminder.id} delayed due to quiet hours until ${quietHoursCheck.delayUntil?.toISOString()}`);
-        return;
-      }
+      } else {
+        const emailResult = await emailService.sendReminderEmail(userProfile.email, payload, {
+          maxAttempts: this.maxRetryAttempts,
+        });
+        const emailStatus: DeliveryStatus = emailResult.success
+          ? 'sent'
+          : (emailResult.metadata?.retryable ? 'retrying' : 'failed');
 
-      const deliveryChannels = preferences.notification_channels;
-      const deliveries: NotificationDelivery[] = [];
-
-      // Email delivery
-      if (deliveryChannels.includes('email') && preferences.email_opt_ins.reminders) {
-        const emailDelivery = await this.createDeliveryRecord(
-          reminder.id,
-          reminder.user_id,
-          'email',
-        );
-        deliveries.push(emailDelivery);
-
-        const emailResult = await emailService.sendReminderEmail(
-          userProfile.email,
-          payload,
-          { maxAttempts: this.maxRetryAttempts },
-        );
+        emailDelivery.status = emailStatus;
 
         await this.updateDeliveryRecord(
           emailDelivery.id,
-          emailResult.success ? 'sent' : 'failed',
+          emailStatus,
           emailResult.error,
           emailResult.metadata,
         );
       }
+    }
 
-      // Push delivery
-      if (deliveryChannels.includes('push')) {
-        const pushSubscription = await this.getPushSubscription(reminder.user_id);
-        if (pushSubscription) {
-          const pushDelivery = await this.createDeliveryRecord(
-            reminder.id,
-            reminder.user_id,
-            'push',
-          );
-          deliveries.push(pushDelivery);
+    if (deliveryChannels.includes('push')) {
+      const pushDelivery = await this.createDeliveryRecord(reminder.id, reminder.user_id, 'push');
+      deliveries.push(pushDelivery);
 
-          const pushResult = await pushService.sendPushNotification(
-            pushSubscription,
-            payload,
-            { maxAttempts: this.maxRetryAttempts },
-          );
+      const pushSubscription = await this.getPushSubscription(reminder.user_id);
+      if (!pushSubscription) {
+        pushDelivery.status = 'failed';
+        await this.updateDeliveryRecord(pushDelivery.id, 'failed', 'Push subscription not found', {
+          retryable: false,
+        });
+      } else {
+        const pushResult = await pushService.sendPushNotification(pushSubscription, payload, {
+          maxAttempts: this.maxRetryAttempts,
+        });
+        const pushStatus: DeliveryStatus = pushResult.success
+          ? 'sent'
+          : (pushResult.metadata?.retryable ? 'retrying' : 'failed');
 
-          await this.updateDeliveryRecord(
-            pushDelivery.id,
-            pushResult.success ? 'sent' : 'failed',
-            pushResult.error,
-            pushResult.metadata,
-          );
+        pushDelivery.status = pushStatus;
 
-          // Clean up stale push subscription on permanent failure (410/404)
-          if (!pushResult.success && pushResult.metadata?.retryable === false) {
-            await this.removeStalePushSubscription(reminder.user_id);
-          }
-        } else {
-          logger.debug(
-            `No push subscription found for user ${reminder.user_id}, skipping push delivery`,
-          );
+        await this.updateDeliveryRecord(
+          pushDelivery.id,
+          pushStatus,
+          pushResult.error,
+          pushResult.metadata,
+        );
+
+        if (!pushResult.success && pushResult.metadata?.retryable === false) {
+          await this.removeStalePushSubscription(reminder.user_id);
         }
       }
+    }
 
-      await blockchainService.logReminderEvent(
-        reminder.user_id,
-        payload,
-        deliveryChannels,
+    if (deliveryChannels.includes('slack')) {
+      const slackDelivery = await this.createDeliveryRecord(reminder.id, reminder.user_id, 'slack');
+      deliveries.push(slackDelivery);
+
+      const slackResult = await slackService.sendReminderNotification(payload, {
+        maxAttempts: this.maxRetryAttempts,
+      });
+      const slackStatus: DeliveryStatus = slackResult.success
+        ? 'sent'
+        : (slackResult.metadata?.retryable ? 'retrying' : 'failed');
+
+      slackDelivery.status = slackStatus;
+
+      await this.updateDeliveryRecord(
+        slackDelivery.id,
+        slackStatus,
+        slackResult.error,
+        slackResult.metadata,
       );
+    }
 
-      const hasSuccess = deliveries.some(
-        (d) => d.status === 'sent' || d.status === 'retrying',
-      );
+    if (deliveryChannels.includes('telegram') && userPreferences.email_opt_ins.reminders) {
+      const subPrefs = await this.getNotificationPreferences(reminder.subscription_id, reminder.user_id);
+      if (!subPrefs.muted && subPrefs.channels.includes('telegram')) {
+        const telegramDelivery = await this.createDeliveryRecord(reminder.id, reminder.user_id, 'telegram');
+        deliveries.push(telegramDelivery);
 
-      await supabase
-        .from('reminder_schedules')
-        .update({
-          status: hasSuccess ? 'sent' : 'failed',
-          updated_at: new Date().toISOString(),
-        })
-        .eq('id', reminder.id);
+        const telegramResult = await telegramBotService.sendRenewalReminder(reminder.user_id, payload, undefined, {
+          maxAttempts: this.maxRetryAttempts,
+        });
+        const telegramStatus: DeliveryStatus = telegramResult.success
+          ? 'sent'
+          : (telegramResult.metadata?.retryable ? 'retrying' : 'failed');
 
-      logger.info(`Reminder ${reminder.id} processed successfully`);
+        telegramDelivery.status = telegramStatus;
+
+        await this.updateDeliveryRecord(
+          telegramDelivery.id,
+          telegramStatus,
+          telegramResult.error,
+          telegramResult.metadata,
+        );
+      }
+    }
+
+    await blockchainService.logReminderEvent(reminder.user_id, payload, deliveryChannels);
+
+    const hasDeliveryProgress = deliveries.some((delivery) =>
+      delivery.status === 'sent' || delivery.status === 'retrying',
+    );
+
+    const { error: reminderUpdateError } = await supabase
+      .from('reminder_schedules')
+      .update({
+        status: hasDeliveryProgress ? 'sent' : 'failed',
+        updated_at: new Date().toISOString(),
+      })
+      .eq('id', reminder.id);
+
+      if (reminderUpdateError) {
+        logger.error(`Failed to update reminder ${reminder.id}:`, reminderUpdateError);
+        throw reminderUpdateError;
+      }
     } catch (error) {
       logger.error(`Error processing reminder ${reminder.id}:`, error);
       await this.markReminderAsFailed(reminder.id, String(error));
@@ -437,260 +443,140 @@ export class ReminderEngine {
     }
   }
 
-  /**
-   * Retry a failed delivery
-   */
   private async retryDelivery(
     delivery: NotificationDelivery & { reminder_schedules: ReminderSchedule },
   ): Promise<void> {
     const reminder = delivery.reminder_schedules;
     const newAttemptCount = delivery.attempt_count + 1;
-
-    logger.info(
-      `Retrying delivery ${delivery.id} (attempt ${newAttemptCount}/${this.maxRetryAttempts})`,
-    );
-
-    try {
-      const subscription = await this.getSubscription(reminder.subscription_id);
-      const userProfile = await this.getUserProfile(delivery.user_id);
-
-      if (!subscription || !userProfile) {
-        await this.markDeliveryAsFailed(delivery.id, 'Subscription or user not found');
-        return;
-      }
-
-      const renewalDate = subscription.active_until || new Date().toISOString();
-      const payload: NotificationPayload = {
-        title: `${subscription.name} Renewal Reminder`,
-        body: `${subscription.name} will renew in ${reminder.days_before} day${reminder.days_before > 1 ? 's' : ''}`,
-        subscription,
-        reminderType: reminder.reminder_type,
-        daysBefore: reminder.days_before,
-        renewalDate,
-      };
-
-      let result: { success: boolean; error?: string; metadata?: Record<string, any> };
-
-      if (delivery.channel === 'email') {
-        result = await emailService.sendReminderEmail(userProfile.email, payload, {
-          maxAttempts: 1,
-        });
-      } else if (delivery.channel === 'push') {
-        const pushSubscription = await this.getPushSubscription(delivery.user_id);
-        if (!pushSubscription) {
-          await this.markDeliveryAsFailed(delivery.id, 'Push subscription not found');
-          return;
-        }
-        result = await pushService.sendPushNotification(pushSubscription, payload, {
-          maxAttempts: 1,
-        });
-
-        // Clean up stale subscription on permanent failure
-        if (!result.success && result.metadata?.retryable === false) {
-          await this.removeStalePushSubscription(delivery.user_id);
-        }
-      } else {
-        await this.markDeliveryAsFailed(delivery.id, `Unknown channel: ${delivery.channel}`);
-        return;
-      }
-
-      if (result.success) {
-        await supabase
-          .from('notification_deliveries')
-          .update({
-            status: 'sent',
-            attempt_count: newAttemptCount,
-            last_attempt_at: new Date().toISOString(),
-            next_retry_at: null,
-            error_message: null,
-            updated_at: new Date().toISOString(),
-          })
-          .eq('id', delivery.id);
-      } else {
-        const delay = calculateBackoffDelay(newAttemptCount);
-        const nextRetryAt = new Date(Date.now() + delay);
-
-        if (newAttemptCount >= this.maxRetryAttempts) {
-          await this.markDeliveryAsFailed(delivery.id, result.error || 'Max attempts reached');
-        } else {
-          await supabase
-            .from('notification_deliveries')
-            .update({
-              status: 'retrying',
-              attempt_count: newAttemptCount,
-              last_attempt_at: new Date().toISOString(),
-              next_retry_at: nextRetryAt.toISOString(),
-              error_message: result.error || null,
-              updated_at: new Date().toISOString(),
-            })
-            .eq('id', delivery.id);
-        }
-      }
-    } catch (error) {
-      logger.error(`Error retrying delivery ${delivery.id}:`, error);
-      await this.markDeliveryAsFailed(delivery.id, String(error));
-    }
-  }
-
-  // Trial reminder windows (days before trial ends)
-  private static readonly TRIAL_REMINDER_DAYS = [14, 7, 3, 1, 0];
-
-  /**
-   * Schedule trial-specific reminders for active trial subscriptions.
-   * Uses more aggressive windows than regular renewals.
-   * Credit-card-required trials get the full 14-day early warning.
-   */
-  async scheduleTrialReminders(): Promise<void> {
-    logger.info('Scheduling trial reminders');
-
-    try {
-      const { data: trials, error } = await supabase
-        .from('subscriptions')
-        .select('*')
-        .eq('is_trial', true)
-        .in('status', ['active'])
-        .not('trial_ends_at', 'is', null)
-        .gt('trial_ends_at', new Date().toISOString());
-
-      if (error) throw error;
-      if (!trials || trials.length === 0) {
-        logger.info('No active trials to schedule reminders for');
-        return;
-      }
-
-      logger.info(`Found ${trials.length} active trials`);
-
-      for (const sub of trials) {
-        const trialEnd = new Date(sub.trial_ends_at);
-        const today = new Date();
-        today.setHours(0, 0, 0, 0);
-
-        // Credit-card-required trials get all windows; others skip the 14-day one
-        const windows = sub.credit_card_required
-          ? ReminderEngine.TRIAL_REMINDER_DAYS
-          : ReminderEngine.TRIAL_REMINDER_DAYS.filter((d) => d !== 14);
-
-        for (const days of windows) {
-          const reminderDate = new Date(trialEnd);
-          reminderDate.setDate(reminderDate.getDate() - days);
-          reminderDate.setHours(0, 0, 0, 0);
-
-          if (reminderDate >= today) {
-            const { data: existing } = await supabase
-              .from('reminder_schedules')
-              .select('id')
-              .eq('subscription_id', sub.id)
-              .eq('reminder_type', 'trial_expiry')
-              .eq('days_before', days)
-              .eq('status', 'pending')
-              .single();
-
-            if (!existing) {
-              await supabase.from('reminder_schedules').insert({
-                subscription_id: sub.id,
-                user_id: sub.user_id,
-                reminder_date: reminderDate.toISOString().split('T')[0],
-                reminder_type: 'trial_expiry',
-                days_before: days,
-                status: 'pending',
-              });
-              logger.debug(`Scheduled trial reminder for ${sub.id} (${days} days before)`);
-            }
-          }
-        }
-      }
-
-      logger.info('Trial reminder scheduling completed');
-    } catch (error) {
-      logger.error('Error scheduling trial reminders:', error);
-      throw error;
-    }
-  }
-
-  /**
-   * Resolve the effective notification preferences for a subscription.
-   * Priority: per-subscription override → user global settings → engine defaults
-   */
-  private async getNotificationPreferences(
-    subscriptionId: string,
-    userId: string,
-  ): Promise<{
-    reminder_days_before: number[];
-    channels: string[];
-    muted: boolean;
-  }> {
-    // 1. Per-subscription override
-    try {
-      const override = await notificationPreferenceService.getPreferences(subscriptionId);
-      if (override) {
-        return {
-          reminder_days_before: override.reminder_days_before,
-          channels: override.channels,
-          muted: override.muted,
-        };
-      }
-    } catch (err) {
-      logger.warn(
-        `Could not fetch subscription-level prefs for ${subscriptionId}, falling back:`,
-        err,
-      );
+    const subscription = await this.getSubscription(reminder.subscription_id);
+    if (!subscription) {
+      await this.markDeliveryAsFailed(delivery.id, 'Subscription not found');
+      return;
     }
 
-    // 2. User global settings
-    try {
-      const userPrefs = await userPreferenceService.getPreferences(userId);
-      return {
-        reminder_days_before: userPrefs.reminder_timing ?? this.defaultDaysBefore,
-        channels: userPrefs.notification_channels ?? ['email'],
-        muted: false,
-      };
-    } catch (err) {
-      logger.warn(
-        `Could not fetch user-level prefs for ${userId}, using engine defaults:`,
-        err,
-      );
-    }
-
-    // 3. Engine defaults
-    return {
-      reminder_days_before: this.defaultDaysBefore,
-      channels: ['email'],
-      muted: false,
+    const payload: NotificationPayload = {
+      title: `${subscription.name} Renewal Reminder`,
+      body: `${subscription.name} will renew in ${reminder.days_before} day${reminder.days_before === 1 ? '' : 's'}`,
+      subscription,
+      reminderType: reminder.reminder_type,
+      daysBefore: reminder.days_before,
+      renewalDate: subscription.active_until || new Date().toISOString(),
     };
+
+    let result: { success: boolean; error?: string; metadata?: Record<string, any> } = {
+      success: false,
+      error: 'Unknown delivery channel',
+      metadata: { retryable: false },
+    };
+
+    if (delivery.channel === 'email') {
+      const userProfile = await this.getUserProfile(delivery.user_id);
+      if (!userProfile?.email) {
+        await this.markDeliveryAsFailed(delivery.id, 'User email not found');
+        return;
+      }
+
+      result = await emailService.sendReminderEmail(userProfile.email, payload, {
+        maxAttempts: 1,
+      });
+    } else if (delivery.channel === 'push') {
+      const pushSubscription = await this.getPushSubscription(delivery.user_id);
+      if (!pushSubscription) {
+        await this.markDeliveryAsFailed(delivery.id, 'Push subscription not found');
+        return;
+      }
+
+      result = await pushService.sendPushNotification(pushSubscription, payload, {
+        maxAttempts: 1,
+      });
+
+      if (!result.success && result.metadata?.retryable === false) {
+        await this.removeStalePushSubscription(delivery.user_id);
+      }
+    } else if (delivery.channel === 'slack') {
+      result = await slackService.sendReminderNotification(payload, {
+        maxAttempts: 1,
+      });
+    } else if (delivery.channel === 'telegram') {
+      result = await telegramBotService.sendRenewalReminder(delivery.user_id, payload, undefined, {
+        maxAttempts: 1,
+      });
+    }
+
+    if (result.success) {
+      await this.updateDeliveryRecord(delivery.id, 'sent', undefined, result.metadata, newAttemptCount);
+      return;
+    }
+
+    const retryable = result.metadata?.retryable !== false;
+    if (!retryable || newAttemptCount >= this.maxRetryAttempts) {
+      await this.markDeliveryAsFailed(delivery.id, result.error || 'Max attempts reached');
+      return;
+    }
+
+    const delay = calculateBackoffDelay(newAttemptCount);
+    const nextRetryAt = new Date(Date.now() + delay);
+
+    await this.updateDeliveryRecord(
+      delivery.id,
+      'retrying',
+      result.error,
+      result.metadata,
+      newAttemptCount,
+      nextRetryAt.toISOString(),
+    );
   }
 
   private async getSubscription(id: string): Promise<Subscription | null> {
-    const { data, error } = await supabase
-      .from('subscriptions')
-      .select('*')
-      .eq('id', id)
-      .single();
+    try {
+      const { data, error } = await supabase.from('subscriptions').select('*').eq('id', id).single();
+      if (error) {
+        if (error.code === 'PGRST116') {
+          return null;
+        }
+        logger.error(`Failed to fetch subscription ${id}:`, error);
+        return null;
+      }
 
-    if (error || !data) return null;
-    return data as Subscription;
+      return (data as Subscription) || null;
+    } catch (error) {
+      logger.error(`Unexpected error fetching subscription ${id}:`, error);
+      return null;
+    }
   }
 
   private async getUserProfile(userId: string): Promise<UserProfile | null> {
-    const { data, error } = await supabase
-      .from('profiles')
-      .select('*')
-      .eq('id', userId)
-      .single();
-
-    if (error || !data) return null;
-
-    let email = data.email || '';
+    try {
+      const { data, error } = await supabase.from('profiles').select('*').eq('id', userId).single();
+      if (!error && data) {
+        return {
+          id: data.id,
+          email: data.email || '',
+          full_name: data.full_name || data.display_name || null,
+          timezone: data.timezone || 'UTC',
+          currency: data.currency || 'USD',
+        };
+      }
+    } catch {
+      // fall through to auth/email account lookup
+    }
 
     try {
       const { data: authUser, error: authError } = await supabase.auth.admin.getUserById(userId);
       if (!authError && authUser?.user?.email) {
-        email = authUser.user.email;
+        return {
+          id: userId,
+          email: authUser.user.email,
+          full_name: authUser.user.user_metadata?.full_name || null,
+          timezone: authUser.user.user_metadata?.timezone || 'UTC',
+          currency: authUser.user.user_metadata?.currency || 'USD',
+        };
       }
-    } catch (authErr) {
-      logger.warn(`Could not fetch email from auth.users for user ${userId}:`, authErr);
+    } catch (error) {
+      logger.warn(`Could not fetch auth user email for ${userId}:`, error);
     }
 
-    if (!email) {
+    try {
       const { data: emailAccount } = await supabase
         .from('email_accounts')
         .select('email')
@@ -699,29 +585,22 @@ export class ReminderEngine {
         .limit(1)
         .single();
 
-      if (emailAccount) {
-        email = emailAccount.email;
+      if (emailAccount?.email) {
+        return {
+          id: userId,
+          email: emailAccount.email,
+          full_name: null,
+          timezone: 'UTC',
+          currency: 'USD',
+        };
       }
+    } catch {
+      // no-op
     }
 
-    if (!email) {
-      logger.error(`No email found for user ${userId}`);
-      return null;
-    }
-
-    return {
-      id: data.id,
-      email,
-      full_name: data.full_name || data.display_name || null,
-      timezone: data.timezone || 'UTC',
-      currency: data.currency || 'USD',
-    };
+    return null;
   }
 
-  /**
-   * Fetch the most recently created push subscription for a user.
-   * Returns null if the user has no active push subscription.
-   */
   private async getPushSubscription(userId: string): Promise<PushSubscription | null> {
     try {
       const { data, error } = await supabase
@@ -733,12 +612,16 @@ export class ReminderEngine {
         .single();
 
       if (error) {
-        if (error.code === 'PGRST116') return null;
-        logger.error(`Error fetching push subscription for user ${userId}:`, error);
+        if (error.code === 'PGRST116') {
+          return null;
+        }
+        logger.error(`Failed to fetch push subscription for ${userId}:`, error);
         return null;
       }
 
-      if (!data) return null;
+      if (!data) {
+        return null;
+      }
 
       return {
         endpoint: data.endpoint,
@@ -747,37 +630,23 @@ export class ReminderEngine {
           auth: data.auth,
         },
       };
-    } catch (err) {
-      logger.error(`Unexpected error fetching push subscription for user ${userId}:`, err);
+    } catch (error) {
+      logger.error(`Unexpected error fetching push subscription for ${userId}:`, error);
       return null;
     }
   }
 
-  /**
-   * Remove all push subscriptions for a user when the browser reports
-   * the subscription is gone (HTTP 410/404).
-   */
   private async removeStalePushSubscription(userId: string): Promise<void> {
-    try {
-      const { error } = await supabase
-        .from('push_subscriptions')
-        .delete()
-        .eq('user_id', userId);
-
-      if (error) {
-        logger.warn(`Failed to remove stale push subscriptions for user ${userId}:`, error);
-      } else {
-        logger.info(`Removed stale push subscriptions for user ${userId}`);
-      }
-    } catch (err) {
-      logger.error(`Unexpected error removing stale push subscriptions for user ${userId}:`, err);
+    const { error } = await supabase.from('push_subscriptions').delete().eq('user_id', userId);
+    if (error) {
+      logger.warn(`Failed to remove stale push subscriptions for ${userId}:`, error);
     }
   }
 
   private async createDeliveryRecord(
     reminderScheduleId: string,
     userId: string,
-    channel: 'email' | 'push',
+    channel: NotificationDelivery['channel'],
   ): Promise<NotificationDelivery> {
     const { data, error } = await supabase
       .from('notification_deliveries')
@@ -792,41 +661,50 @@ export class ReminderEngine {
       .select()
       .single();
 
-    if (error) throw error;
+    if (error) {
+      throw error;
+    }
+
     return data as NotificationDelivery;
   }
 
   private async updateDeliveryRecord(
     deliveryId: string,
-    status: 'sent' | 'failed' | 'retrying',
-    errorMessage: string | undefined,
-    metadata: Record<string, any> | undefined,
+    status: DeliveryStatus,
+    errorMessage?: string,
+    metadata?: Record<string, any>,
+    attemptCount = 1,
+    nextRetryAt?: string,
   ): Promise<void> {
-    const updateData: any = {
+    const updateData: Record<string, unknown> = {
       status,
-      attempt_count: 1,
+      attempt_count: attemptCount,
       last_attempt_at: new Date().toISOString(),
       updated_at: new Date().toISOString(),
     };
 
-    if (errorMessage) updateData.error_message = errorMessage;
-    if (metadata) updateData.metadata = metadata;
-
-    if (status === 'retrying') {
-      const delay = calculateBackoffDelay(1);
-      updateData.next_retry_at = new Date(Date.now() + delay).toISOString();
+    if (errorMessage) {
+      updateData.error_message = errorMessage;
     }
 
-    const { error } = await supabase
-      .from('notification_deliveries')
-      .update(updateData)
-      .eq('id', deliveryId);
+    if (metadata) {
+      updateData.metadata = metadata;
+    }
 
-    if (error) throw error;
+    if (status === 'retrying') {
+      updateData.next_retry_at = nextRetryAt || new Date(Date.now() + calculateBackoffDelay(attemptCount)).toISOString();
+    } else {
+      updateData.next_retry_at = null;
+    }
+
+    const { error } = await supabase.from('notification_deliveries').update(updateData).eq('id', deliveryId);
+    if (error) {
+      throw error;
+    }
   }
 
   private async markReminderAsFailed(reminderId: string, reason: string): Promise<void> {
-    await supabase
+    const { error } = await supabase
       .from('reminder_schedules')
       .update({
         status: 'failed',
@@ -834,11 +712,15 @@ export class ReminderEngine {
       })
       .eq('id', reminderId);
 
-    logger.warn(`Marked reminder ${reminderId} as failed: ${reason}`);
+    if (error) {
+      logger.error(`Failed to mark reminder ${reminderId} as failed:`, error);
+    }
+
+    logger.warn(`Reminder ${reminderId} marked as failed: ${reason}`);
   }
 
   private async markDeliveryAsFailed(deliveryId: string, reason: string): Promise<void> {
-    await supabase
+    const { error } = await supabase
       .from('notification_deliveries')
       .update({
         status: 'failed',
@@ -847,7 +729,48 @@ export class ReminderEngine {
       })
       .eq('id', deliveryId);
 
-    logger.warn(`Marked delivery ${deliveryId} as failed: ${reason}`);
+    if (error) {
+      logger.error(`Failed to mark delivery ${deliveryId} as failed:`, error);
+    }
+  }
+
+  private async getNotificationPreferences(
+    subscriptionId: string,
+    userId: string,
+  ): Promise<{
+    reminder_days_before: number[];
+    channels: string[];
+    muted: boolean;
+  }> {
+    try {
+      const override = await notificationPreferenceService.getPreferences(subscriptionId);
+      if (override) {
+        return {
+          reminder_days_before: override.reminder_days_before,
+          channels: override.channels,
+          muted: override.muted,
+        };
+      }
+    } catch (error) {
+      logger.warn(`Could not fetch subscription-level prefs for ${subscriptionId}, falling back:`, error);
+    }
+
+    try {
+      const userPrefs = await userPreferenceService.getPreferences(userId);
+      return {
+        reminder_days_before: userPrefs.reminder_timing ?? this.defaultDaysBefore,
+        channels: userPrefs.notification_channels ?? ['email'],
+        muted: false,
+      };
+    } catch (error) {
+      logger.warn(`Could not fetch user-level prefs for ${userId}, using engine defaults:`, error);
+    }
+
+    return {
+      reminder_days_before: this.defaultDaysBefore,
+      channels: ['email'],
+      muted: false,
+    };
   }
 }
 

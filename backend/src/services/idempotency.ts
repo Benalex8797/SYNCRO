@@ -2,31 +2,50 @@ import { supabase } from '../config/database';
 import logger from '../config/logger';
 import crypto from 'crypto';
 
-export interface IdempotencyRecord {
+export interface IdempotencyRecord<TResponse = unknown> {
   id: string;
   key: string;
   user_id: string;
   request_hash: string;
   response_status: number;
-  response_body: any;
+  response_body: TResponse;
   created_at: string;
   expires_at: string;
 }
+
+export interface TypedIdempotentResponse<TResponse = unknown> {
+  status: number;
+  body: TResponse;
+  idempotencyKey: string;
+}
+
+export interface SerializablePayload {
+  toJSON(): string;
+}
+
+export type SerializableInput = string | number | boolean | null | undefined | 
+  SerializableObject | SerializableArray;
+
+interface SerializableObject {
+  [key: string]: SerializableInput;
+}
+
+interface SerializableArray extends Array<SerializableInput> {}
 
 /**
  * Idempotency service to prevent duplicate operations
  * Uses request hashing and key-based deduplication
  */
-export class IdempotencyService {
+export class IdempotencyService<TPayload extends SerializableInput = SerializableInput, TResponse = unknown> {
   private readonly ttlHours = 24; 
 
   /**
    * Generate idempotency key from request
    */
-  generateKey(userId: string, operation: string, payload: any): string {
+  generateKey(userId: string, operation: string, payload: TPayload): string {
     const payloadHash = crypto
       .createHash('sha256')
-      .update(JSON.stringify(payload))
+      .update(this.serializePayload(payload))
       .digest('hex')
       .substring(0, 16);
 
@@ -40,7 +59,7 @@ export class IdempotencyService {
     key: string,
     userId: string,
     requestHash: string
-  ): Promise<{ isDuplicate: boolean; cachedResponse?: any }> {
+  ): Promise<{ isDuplicate: boolean; cachedResponse?: TypedIdempotentResponse<TResponse> }> {
     try {
       // Check for existing idempotency record
       const { data: existing, error } = await supabase
@@ -86,7 +105,7 @@ export class IdempotencyService {
     userId: string,
     requestHash: string,
     responseStatus: number,
-    responseBody: any
+    responseBody: TResponse
   ): Promise<void> {
     try {
       const expiresAt = new Date();
@@ -112,12 +131,19 @@ export class IdempotencyService {
   }
 
   /**
+   * Type-safe serialization for hash input
+   */
+  private serializePayload(payload: TPayload): string {
+    return JSON.stringify(payload);
+  }
+
+  /**
    * Hash request payload for idempotency checking
    */
-  hashRequest(payload: any): string {
+  hashRequest(payload: TPayload): string {
     return crypto
       .createHash('sha256')
-      .update(JSON.stringify(payload))
+      .update(this.serializePayload(payload))
       .digest('hex');
   }
 
@@ -208,4 +234,10 @@ export class IdempotencyService {
   }
 }
 
+// Type-safe factory function for creating typed idempotency services
+export function createIdempotencyService<TPayload extends SerializableInput = SerializableInput, TResponse = unknown>(): IdempotencyService<TPayload, TResponse> {
+  return new IdempotencyService<TPayload, TResponse>();
+}
+
+// Default untyped instance for backward compatibility
 export const idempotencyService = new IdempotencyService();

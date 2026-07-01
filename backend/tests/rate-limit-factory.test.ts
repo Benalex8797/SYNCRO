@@ -25,6 +25,7 @@ describe('RateLimiterFactory', () => {
       expect(RateLimiterFactory.getStoreStatus()).toEqual({
         type: 'redis',
         available: true,
+        degraded: false,
       });
     });
 
@@ -37,6 +38,7 @@ describe('RateLimiterFactory', () => {
       expect(RateLimiterFactory.getStoreStatus()).toEqual({
         type: 'memory',
         available: true,
+        degraded: true,
       });
     });
 
@@ -129,6 +131,7 @@ describe('RateLimiterFactory', () => {
       expect(status).toEqual({
         type: 'memory',
         available: false,
+        degraded: false,
       });
     });
 
@@ -142,6 +145,7 @@ describe('RateLimiterFactory', () => {
       expect(status).toEqual({
         type: 'redis',
         available: true,
+        degraded: false,
       });
     });
   });

@@ -2,13 +2,58 @@
 
 import { useState, useCallback } from "react";
 import type { Subscription } from "@/lib/supabase/subscriptions";
+import { IntegrationStatus } from "@/lib/integration-types";
+import type { Integration } from "@/lib/integration-types";
+import type { Toast } from "@/hooks/use-toast";
+
+export interface EmailAccount {
+  id: number;
+  email: string;
+  isPrimary: boolean;
+  lastScanned?: Date;
+  [key: string]: unknown;
+}
+
+export interface EmailAccountInput {
+  id: number;
+  email: string;
+  isPrimary?: boolean;
+  is_primary?: boolean;
+  [key: string]: unknown;
+}
+
+export type CreateEmailAccountInput = Omit<EmailAccountInput, "id">;
+
+type ToastPayload = Omit<Toast, "id">;
+
+export type EmailLinkedSubscription = Subscription & {
+  emailAccountId?: number | null;
+  statusNote?: string;
+};
+
+function normalizeEmailAccounts(accounts: EmailAccountInput[]): EmailAccount[] {
+  return accounts.map((account) => ({
+    ...account,
+    isPrimary: Boolean(account.isPrimary ?? account.is_primary ?? false),
+  }));
+}
+
+function isSubscriptionLinkedToEmailAccount(
+  subscription: EmailLinkedSubscription,
+  emailAccountId: number
+): boolean {
+  return (
+    subscription.emailAccountId === emailAccountId ||
+    subscription.email_account_id === emailAccountId
+  );
+}
 
 interface UseEmailAccountsProps {
-  initialAccounts: any[];
-  subscriptions: Subscription[];
-  updateSubscriptions: (subs: Subscription[]) => void;
-  addToHistory: (subs: Subscription[]) => void;
-  onToast: (toast: any) => void;
+  initialAccounts: EmailAccountInput[];
+  subscriptions: EmailLinkedSubscription[];
+  updateSubscriptions: (subs: EmailLinkedSubscription[]) => void;
+  addToHistory: (subs: EmailLinkedSubscription[]) => void;
+  onToast: (toast: ToastPayload) => void;
 }
 
 export function useEmailAccounts({
@@ -18,13 +63,15 @@ export function useEmailAccounts({
   addToHistory,
   onToast,
 }: UseEmailAccountsProps) {
-  const [emailAccounts, setEmailAccounts] = useState(initialAccounts);
-  const [integrations, setIntegrations] = useState([
+  const [emailAccounts, setEmailAccounts] = useState<EmailAccount[]>(() =>
+    normalizeEmailAccounts(initialAccounts)
+  );
+  const [integrations, setIntegrations] = useState<Integration[]>([
     {
       id: 1,
       name: "Gmail",
       type: "Email Integration",
-      status: "connected",
+      status: IntegrationStatus.Connected,
       lastSync: "2 minutes ago",
       accounts: initialAccounts.length,
     },
@@ -32,19 +79,28 @@ export function useEmailAccounts({
       id: 3,
       name: "Manual tools",
       type: "Self-managed",
-      status: "connected",
+      status: IntegrationStatus.Connected,
       lastSync: "2 minutes ago",
       accounts: 0,
     },
   ]);
 
   const handleAddEmailAccount = useCallback(
-    (emailAccountData: any) => {
+    (emailAccountData: CreateEmailAccountInput) => {
       const newId =
         emailAccounts.length > 0
           ? Math.max(...emailAccounts.map((acc) => acc.id)) + 1
           : 1;
-      setEmailAccounts([...emailAccounts, { ...emailAccountData, id: newId }]);
+
+      const newAccount: EmailAccount = {
+        ...emailAccountData,
+        id: newId,
+        isPrimary: Boolean(
+          emailAccountData.isPrimary ?? emailAccountData.is_primary ?? false
+        ),
+      };
+
+      setEmailAccounts([...emailAccounts, newAccount]);
       setIntegrations(
         integrations.map((int) =>
           int.name === "Gmail"
@@ -54,7 +110,7 @@ export function useEmailAccounts({
       );
       onToast({
         title: "Email account added",
-        description: `${emailAccountData.email} has been successfully connected.`,
+        description: `${newAccount.email} has been successfully connected.`,
         variant: "success",
       });
     },
@@ -85,9 +141,8 @@ export function useEmailAccounts({
       }
 
       // Mark subscriptions from this email as "source_removed"
-      const affectedSubscriptions = subscriptions.filter(
-        (sub: any) =>
-          (sub as any).emailAccountId === id || sub.email_account_id === id
+      const affectedSubscriptions = subscriptions.filter((sub) =>
+        isSubscriptionLinkedToEmailAccount(sub, id)
       );
 
       if (affectedSubscriptions.length > 0) {
@@ -98,8 +153,8 @@ export function useEmailAccounts({
         if (!confirmDelete) return;
 
         // Update subscriptions to mark as source_removed
-        const updatedSubs = subscriptions.map((sub: any) =>
-          (sub as any).emailAccountId === id || sub.email_account_id === id
+        const updatedSubs = subscriptions.map((sub) =>
+          isSubscriptionLinkedToEmailAccount(sub, id)
             ? {
                 ...sub,
                 status: "source_removed",
@@ -171,7 +226,10 @@ export function useEmailAccounts({
         int.id === id
           ? {
               ...int,
-              status: int.status === "connected" ? "disconnected" : "connected",
+              status:
+                int.status === IntegrationStatus.Connected
+                  ? IntegrationStatus.Disconnected
+                  : IntegrationStatus.Connected,
             }
           : int
       )

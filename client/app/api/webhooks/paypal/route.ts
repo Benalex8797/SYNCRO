@@ -1,0 +1,297 @@
+/**
+ * PayPal Webhook Handler
+ * Handles PayPal webhook events for payment status updates
+ * 
+ * Supported events:
+ * - PAYMENT.CAPTURE.COMPLETED
+ * - PAYMENT.CAPTURE.DENIED
+ * - PAYMENT.CAPTURE.REFUNDED
+ * - CHECKOUT.ORDER.APPROVED
+ * - CHECKOUT.ORDER.COMPLETED
+ * 
+ * @see https://developer.paypal.com/api/rest/webhooks/
+ */
+
+import { type NextRequest, NextResponse } from "next/server"
+import { createClient } from "@/lib/supabase/server"
+import crypto from "crypto"
+
+interface PayPalWebhookEvent {
+    id: string
+    event_type: string
+    resource_type: string
+    summary: string
+    resource: {
+        id: string
+        status: string
+        amount?: {
+            currency_code: string
+            value: string
+        }
+        custom_id?: string
+    }
+    create_time: string
+}
+
+/**
+ * Verify PayPal webhook signature
+ * @see https://developer.paypal.com/api/rest/webhooks/rest/#verify-webhook-signature
+ */
+async function verifyWebhookSignature(
+    request: NextRequest,
+    body: string
+): Promise<boolean> {
+    const webhookId = process.env.PAYPAL_WEBHOOK_ID
+    
+    if (!webhookId) {
+        console.warn('[PayPal Webhook] PAYPAL_WEBHOOK_ID not configured, skipping signature verification')
+        return true // Allow in development
+    }
+
+    const transmissionId = request.headers.get('paypal-transmission-id')
+    const transmissionTime = request.headers.get('paypal-transmission-time')
+    const certUrl = request.headers.get('paypal-cert-url')
+    const authAlgo = request.headers.get('paypal-auth-algo')
+    const transmissionSig = request.headers.get('paypal-transmission-sig')
+
+    if (!transmissionId || !transmissionTime || !certUrl || !authAlgo || !transmissionSig) {
+        console.error('[PayPal Webhook] Missing required headers')
+        return false
+    }
+
+    try {
+        // Verify signature using PayPal API
+        const paypalMode = process.env.PAYPAL_MODE || 'sandbox'
+        const baseUrl = paypalMode === 'live'
+            ? 'https://api-m.paypal.com'
+            : 'https://api-m.sandbox.paypal.com'
+
+        // Get access token
+        const clientId = process.env.PAYPAL_CLIENT_ID
+        const clientSecret = process.env.PAYPAL_CLIENT_SECRET
+        const auth = Buffer.from(`${clientId}:${clientSecret}`).toString('base64')
+
+        const tokenResponse = await fetch(`${baseUrl}/v1/oauth2/token`, {
+            method: 'POST',
+            headers: {
+                'Authorization': `Basic ${auth}`,
+                'Content-Type': 'application/x-www-form-urlencoded',
+            },
+            body: 'grant_type=client_credentials',
+        })
+
+        if (!tokenResponse.ok) {
+            console.error('[PayPal Webhook] Failed to get access token')
+            return false
+        }
+
+        const { access_token } = await tokenResponse.json()
+
+        // Verify webhook signature
+        const verifyResponse = await fetch(`${baseUrl}/v1/notifications/verify-webhook-signature`, {
+            method: 'POST',
+            headers: {
+                'Authorization': `Bearer ${access_token}`,
+                'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({
+                transmission_id: transmissionId,
+                transmission_time: transmissionTime,
+                cert_url: certUrl,
+                auth_algo: authAlgo,
+                transmission_sig: transmissionSig,
+                webhook_id: webhookId,
+                webhook_event: JSON.parse(body),
+            }),
+        })
+
+        if (!verifyResponse.ok) {
+            console.error('[PayPal Webhook] Signature verification failed')
+            return false
+        }
+
+        const verifyData = await verifyResponse.json()
+        return verifyData.verification_status === 'SUCCESS'
+    } catch (error) {
+        console.error('[PayPal Webhook] Error verifying signature:', error)
+        return false
+    }
+}
+
+/**
+ * Handle PayPal webhook events
+ */
+export async function POST(request: NextRequest) {
+    try {
+        const body = await request.text()
+        const event: PayPalWebhookEvent = JSON.parse(body)
+
+        console.log('[PayPal Webhook] Received event:', event.event_type, event.id)
+
+        // Verify webhook signature
+        const isValid = await verifyWebhookSignature(request, body)
+        if (!isValid) {
+            console.error('[PayPal Webhook] Invalid signature')
+            return NextResponse.json(
+                { error: 'Invalid signature' },
+                { status: 401 }
+            )
+        }
+
+        // Check for duplicate events (idempotency)
+        const supabase = await createClient()
+        const { data: existingEvent } = await supabase
+            .from('webhook_events')
+            .select('id')
+            .eq('provider', 'paypal')
+            .eq('event_id', event.id)
+            .single()
+
+        if (existingEvent) {
+            console.log('[PayPal Webhook] Duplicate event, skipping:', event.id)
+            return NextResponse.json({ received: true, duplicate: true })
+        }
+
+        // Store webhook event
+        await supabase.from('webhook_events').insert({
+            provider: 'paypal',
+            event_id: event.id,
+            event_type: event.event_type,
+            event_data: event,
+            processed: false,
+        })
+
+        // Process event based on type
+        switch (event.event_type) {
+            case 'PAYMENT.CAPTURE.COMPLETED':
+                await handleCaptureCompleted(event)
+                break
+
+            case 'PAYMENT.CAPTURE.DENIED':
+                await handleCaptureDenied(event)
+                break
+
+            case 'PAYMENT.CAPTURE.REFUNDED':
+                await handleCaptureRefunded(event)
+                break
+
+            case 'CHECKOUT.ORDER.APPROVED':
+                await handleOrderApproved(event)
+                break
+
+            case 'CHECKOUT.ORDER.COMPLETED':
+                await handleOrderCompleted(event)
+                break
+
+            default:
+                console.log('[PayPal Webhook] Unhandled event type:', event.event_type)
+        }
+
+        // Mark event as processed
+        await supabase
+            .from('webhook_events')
+            .update({ processed: true, processed_at: new Date().toISOString() })
+            .eq('event_id', event.id)
+
+        return NextResponse.json({ received: true })
+    } catch (error) {
+        console.error('[PayPal Webhook] Error processing webhook:', error)
+        return NextResponse.json(
+            { error: 'Webhook processing failed' },
+            { status: 500 }
+        )
+    }
+}
+
+/**
+ * Handle PAYMENT.CAPTURE.COMPLETED event
+ */
+async function handleCaptureCompleted(event: PayPalWebhookEvent) {
+    const captureId = event.resource.id
+    const supabase = await createClient()
+
+    console.log('[PayPal Webhook] Processing capture completed:', captureId)
+
+    // Update payment status in database
+    const { error } = await supabase
+        .from('payments')
+        .update({
+            status: 'succeeded',
+            updated_at: new Date().toISOString(),
+        })
+        .eq('transaction_id', captureId)
+
+    if (error) {
+        console.error('[PayPal Webhook] Failed to update payment:', error)
+        throw error
+    }
+
+    console.log('[PayPal Webhook] Payment updated successfully:', captureId)
+}
+
+/**
+ * Handle PAYMENT.CAPTURE.DENIED event
+ */
+async function handleCaptureDenied(event: PayPalWebhookEvent) {
+    const captureId = event.resource.id
+    const supabase = await createClient()
+
+    console.log('[PayPal Webhook] Processing capture denied:', captureId)
+
+    const { error } = await supabase
+        .from('payments')
+        .update({
+            status: 'failed',
+            updated_at: new Date().toISOString(),
+        })
+        .eq('transaction_id', captureId)
+
+    if (error) {
+        console.error('[PayPal Webhook] Failed to update payment:', error)
+        throw error
+    }
+}
+
+/**
+ * Handle PAYMENT.CAPTURE.REFUNDED event
+ */
+async function handleCaptureRefunded(event: PayPalWebhookEvent) {
+    const captureId = event.resource.id
+    const supabase = await createClient()
+
+    console.log('[PayPal Webhook] Processing capture refunded:', captureId)
+
+    const { error } = await supabase
+        .from('payments')
+        .update({
+            status: 'refunded',
+            updated_at: new Date().toISOString(),
+        })
+        .eq('transaction_id', captureId)
+
+    if (error) {
+        console.error('[PayPal Webhook] Failed to update payment:', error)
+        throw error
+    }
+}
+
+/**
+ * Handle CHECKOUT.ORDER.APPROVED event
+ */
+async function handleOrderApproved(event: PayPalWebhookEvent) {
+    const orderId = event.resource.id
+    console.log('[PayPal Webhook] Order approved:', orderId)
+    
+    // Order is approved but not yet captured
+    // The capture will happen when the user returns to the app
+}
+
+/**
+ * Handle CHECKOUT.ORDER.COMPLETED event
+ */
+async function handleOrderCompleted(event: PayPalWebhookEvent) {
+    const orderId = event.resource.id
+    console.log('[PayPal Webhook] Order completed:', orderId)
+    
+    // Order is completed, payment should already be captured
+}

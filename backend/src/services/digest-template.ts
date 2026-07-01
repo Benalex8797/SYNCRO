@@ -193,7 +193,6 @@ export function buildDigestEmailHtml(
     userFullName,
     periodLabel,
     totalMonthlySpend,
-    lastMonthSpend,
     spendDifference,
     spendDifferencePercent,
     yearToDateSpend,

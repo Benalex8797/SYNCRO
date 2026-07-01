@@ -1,13 +1,12 @@
 import { Router, Response } from 'express';
-import { z } from 'zod';
 import { supabase } from '../config/database';
 import { authenticate, AuthenticatedRequest } from '../middleware/auth';
 import { validate } from '../middleware/validate';
 import { recoveryCodeService } from '../services/mfa-service';
 import { TotpRateLimiter } from '../lib/totp-rate-limiter';
 import { createMfaLimiter } from '../middleware/rate-limit-factory';
-import { emailService } from '../services/email-service';
 import logger from '../config/logger';
+import { emitSecurityEvent } from '../services/audit-service';
 import { verifyRecoveryCodeSchema, mfaNotifySchema, requireTwoFaSchema } from '../schemas/mfa';
 
 const router: Router = Router();
@@ -51,7 +50,26 @@ router.post(
       if (!valid) {
         totpRateLimiter.recordFailure(sessionId);
 
-        if (totpRateLimiter.isLocked(sessionId)) {
+        const locked = totpRateLimiter.isLocked(sessionId);
+        await emitSecurityEvent('mfa.recovery_code_failed', {
+          severity: locked ? 'high' : 'medium',
+          actorId: req.user!.id,
+          resourceType: 'mfa',
+          reason: locked ? 'MFA lockout threshold reached' : 'Invalid recovery code',
+          ipAddress: req.ip,
+          userAgent: req.headers['user-agent'] as string | undefined,
+          details: { locked },
+        });
+
+        if (locked) {
+          await emitSecurityEvent('mfa.failure_threshold_reached', {
+            severity: 'high',
+            actorId: req.user!.id,
+            resourceType: 'mfa',
+            reason: 'Recovery code failure threshold exceeded',
+            ipAddress: req.ip,
+            userAgent: req.headers['user-agent'] as string | undefined,
+          });
           return res.status(429).json({
             success: false,
             error: 'Too many failed attempts. Please try again later.',
@@ -97,8 +115,8 @@ router.delete('/2fa/recovery-codes', async (req: AuthenticatedRequest, res: Resp
 // ---------------------------------------------------------------------------
 
 router.post('/2fa/notify', validate(mfaNotifySchema), async (req: AuthenticatedRequest, res: Response) => {
-  const { event } = req.body;
-
+  const userId = req.user!.id;
+  
   totpRateLimiter.reset(userId);
   res.json({ success: true });
 });

@@ -4,14 +4,18 @@ import crypto from 'crypto';
 import { 
   Webhook, 
   WebhookDelivery, 
-  WebhookEventType, 
+  WebhookEventType,
+  WebhookEventPayloadMap,
   WebhookCreateInput, 
   WebhookUpdateInput 
 } from '../types/webhook';
+import { webhookDeadLetterService } from './webhook-dead-letter-service';
+import { ExternalServiceClient } from '../utils/external-service-client';
+import { emitSecurityEvent } from './audit-service';
 
 export class WebhookService {
-  private readonly MAX_RETRIES = 5;
   private readonly DISABLE_THRESHOLD = 10;
+  private readonly client = new ExternalServiceClient('outbound_webhooks');
 
   /**
    * Register a new webhook
@@ -99,7 +103,7 @@ export class WebhookService {
   /**
    * Dispatch an event to all applicable webhooks
    */
-  async dispatchEvent(userId: string, eventType: WebhookEventType, data: any): Promise<void> {
+  async dispatchEvent<E extends WebhookEventType>(userId: string, eventType: E, data: WebhookEventPayloadMap[E]): Promise<void> {
     try {
       // Find all enabled webhooks for this user subscribed to this event
       const { data: webhooks, error } = await supabase
@@ -164,7 +168,7 @@ export class WebhookService {
   /**
    * Create a delivery record
    */
-  private async createDelivery(webhookId: string, eventType: WebhookEventType, payload: any): Promise<WebhookDelivery> {
+  private async createDelivery<E extends WebhookEventType>(webhookId: string, eventType: E, payload: { id: string; type: E; created: number; data: WebhookEventPayloadMap[E] }): Promise<WebhookDelivery> {
     const { data, error } = await supabase
       .from('webhook_deliveries')
       .insert({
@@ -204,7 +208,7 @@ export class WebhookService {
       throw new Error(`Delivery ${deliveryId} not found`);
     }
 
-    const webhook = (delivery as any).webhooks as Webhook;
+    const webhook = (delivery as WebhookDelivery & { webhooks: Webhook }).webhooks;
     const payloadString = JSON.stringify(delivery.payload);
     const signature = crypto
       .createHmac('sha256', webhook.secret)
@@ -212,7 +216,7 @@ export class WebhookService {
       .digest('hex');
 
     try {
-      const response = await fetch(webhook.url, {
+      const data = await this.client.request<any>(webhook.url, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -222,17 +226,12 @@ export class WebhookService {
         body: payloadString,
       });
 
-      const responseText = await response.text();
-      const isSuccess = response.ok;
-
-      if (isSuccess) {
-        return await this.updateDeliverySuccess(deliveryId, response.status, responseText.substring(0, 1000));
-      } else {
-        return await this.handleDeliveryFailure(deliveryId, webhook.id, response.status, responseText.substring(0, 1000));
-      }
-    } catch (err) {
+      // ExternalServiceClient throws on !response.ok, so we handle it in catch
+      return await this.updateDeliverySuccess(deliveryId, 200, JSON.stringify(data).substring(0, 1000));
+    } catch (err: any) {
+      const status = err.message.includes('status') ? parseInt(err.message.match(/\d+/)?.[0] || '0') : 0;
       const errorMsg = err instanceof Error ? err.message : String(err);
-      return await this.handleDeliveryFailure(deliveryId, webhook.id, 0, errorMsg);
+      return await this.handleDeliveryFailure(deliveryId, webhook.id, status, errorMsg);
     }
   }
 
@@ -280,7 +279,24 @@ export class WebhookService {
     let nextStatus: 'failed' | 'retrying' = 'failed';
     let scheduledAt = null;
 
-    if (retryCount <= this.MAX_RETRIES) {
+    // Check if we've exhausted retries
+    if (retryCount > this.MAX_RETRIES) {
+      // Move to dead-letter
+      logger.warn(`Delivery ${deliveryId} exhausted retries (${retryCount}), moving to dead-letter`);
+      const errorReason = body || `HTTP ${code || 'network error'}`;
+      await webhookDeadLetterService.moveToDeadLetter(
+        deliveryId,
+        `Exhausted ${this.MAX_RETRIES} retries`,
+        errorReason
+      );
+      emitSecurityEvent('webhook.dead_letter_exhausted', {
+        severity: 'medium',
+        resourceType: 'webhook',
+        resourceId: webhookId,
+        reason: `Delivery ${deliveryId} exhausted retries (${retryCount})`,
+        details: { deliveryId, retryCount, error: errorReason },
+      });
+    } else if (retryCount <= this.MAX_RETRIES) {
       nextStatus = 'retrying';
       // Exponential backoff: 30s, 5m, 30m, 2h, 6h
       const delays = [30, 300, 1800, 7200, 21600];
@@ -297,6 +313,7 @@ export class WebhookService {
         retry_count: retryCount,
         scheduled_at: scheduledAt || new Date().toISOString(),
         updated_at: new Date().toISOString(),
+        last_error_message: body || `HTTP ${code || 'network error'}`,
       })
       .eq('id', deliveryId)
       .select()
@@ -324,6 +341,21 @@ export class WebhookService {
 
     if (!enabled) {
       logger.warn(`Webhook ${webhookId} disabled after ${newFailureCount} consecutive failures`);
+      emitSecurityEvent('webhook.auto_disabled', {
+        severity: 'high',
+        resourceType: 'webhook',
+        resourceId: webhookId,
+        reason: `Disabled after ${newFailureCount} consecutive failures`,
+        details: { failureCount: newFailureCount },
+      });
+    } else if (newFailureCount >= this.DISABLE_THRESHOLD / 2) {
+      emitSecurityEvent('webhook.anomalous_failure_rate', {
+        severity: 'medium',
+        resourceType: 'webhook',
+        resourceId: webhookId,
+        reason: `Elevated failure rate: ${newFailureCount}/${this.DISABLE_THRESHOLD} consecutive failures`,
+        details: { failureCount: newFailureCount, disableThreshold: this.DISABLE_THRESHOLD },
+      });
     }
 
     return data as WebhookDelivery;
@@ -384,6 +416,67 @@ export class WebhookService {
         logger.error(`Retry delivery failed for ${delivery.id}:`, err);
       });
     }
+  }
+
+  /**
+   * Get dead-letter deliveries for a webhook
+   */
+  async getDeadLetterDeliveries(userId: string, webhookId: string) {
+    return webhookDeadLetterService.getDeadLetterDeliveries(userId, webhookId);
+  }
+
+  /**
+   * Get all dead-letter deliveries for a user
+   */
+  async getAllUserDeadLetters(userId: string) {
+    return webhookDeadLetterService.getAllUserDeadLetters(userId);
+  }
+
+  /**
+   * Create a replay request for a dead-letter delivery
+   */
+  async createDeadLetterReplay(userId: string, deliveryId: string, idempotencyKey?: string) {
+    return webhookDeadLetterService.createReplayRequest(deliveryId, userId, idempotencyKey);
+  }
+
+  /**
+   * Get replay history for a dead-letter delivery
+   */
+  async getDeadLetterReplayHistory(userId: string, deliveryId: string) {
+    return webhookDeadLetterService.getReplayHistory(userId, deliveryId);
+  }
+
+  /**
+   * Execute a replay for a dead-letter delivery
+   */
+  async executeDeadLetterReplay(userId: string, replayId: string): Promise<any> {
+    // Fetch the replay
+    const { data: replay, error: replayError } = await supabase
+      .from('webhook_dead_letter_replays')
+      .select('*, webhook_deliveries!inner(*, webhooks!inner(*))')
+      .eq('id', replayId)
+      .single();
+
+    if (replayError || !replay) {
+      throw new Error('Replay request not found');
+    }
+
+    const delivery = replay.webhook_deliveries;
+    const webhook = delivery.webhooks;
+
+    // Verify ownership
+    if (webhook.user_id !== userId) {
+      throw new Error('Access denied');
+    }
+
+    return webhookDeadLetterService.executeReplay(replayId, webhook, delivery);
+  }
+
+  /**
+   * Get dead-letter statistics for a user
+   */
+  async getDeadLetterStats(userId: string) {
+    return webhookDeadLetterService.getDeadLetterStats(userId);
   }
 }
 

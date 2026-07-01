@@ -3,7 +3,7 @@ import { HttpStatus } from "@/lib/api/types"
 import { z } from "zod"
 import { createClient } from "@/lib/supabase/server"
 import { CommonSchemas, validateRequestBody } from "@/lib/api/validation"
-import { createApiRoute, createSuccessResponse, RateLimiters } from "@/lib/api/index"
+import { ApiErrors, createAuthenticatedApiRoute, createSuccessResponse, RateLimiters } from "@/lib/api/index"
 
 // Validation schemas
 const createSubscriptionSchema = z.object({
@@ -20,12 +20,8 @@ const getSubscriptionsSchema = CommonSchemas.pagination.extend({
   category: z.string().optional(),
 })
 
-export const GET = createApiRoute(
+export const GET = createAuthenticatedApiRoute(
   async (request: NextRequest, context, user) => {
-    if (!user) {
-      throw new Error("User not authenticated")
-    }
-
     // Validate query parameters
     const url = new URL(request.url)
     const queryParams: Record<string, string> = {}
@@ -59,7 +55,7 @@ export const GET = createApiRoute(
     const { data, error, count } = await queryBuilder
 
     if (error) {
-      throw new Error(`Failed to fetch subscriptions: ${error.message}`)
+      throw ApiErrors.internalError(`Failed to fetch subscriptions: ${error.message}`)
     }
 
     const total = count || 0
@@ -82,17 +78,12 @@ export const GET = createApiRoute(
     )
   },
   {
-    requireAuth: true,
     rateLimit: RateLimiters.standard,
   }
 )
 
-export const POST = createApiRoute(
+export const POST = createAuthenticatedApiRoute(
   async (request: NextRequest, context, user) => {
-    if (!user) {
-      throw new Error("User not authenticated")
-    }
-
     // Validate request body
     const body = await validateRequestBody(request, createSubscriptionSchema)
 
@@ -112,7 +103,7 @@ export const POST = createApiRoute(
       .single()
 
     if (error) {
-      throw new Error(`Failed to create subscription: ${error.message}`)
+      throw ApiErrors.internalError(`Failed to create subscription: ${error.message}`)
     }
 
     return createSuccessResponse(
@@ -122,7 +113,6 @@ export const POST = createApiRoute(
     )
   },
   {
-    requireAuth: true,
     rateLimit: RateLimiters.standard,
   }
 )

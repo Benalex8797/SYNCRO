@@ -1,21 +1,49 @@
 "use client"
 
 import { useState } from "react"
-import { Users, Plus, Search, Trash2, TrendingUp, Activity, Mail, Briefcase, User, DollarSign } from "lucide-react"
+import { Users, Plus, Search, Trash2, TrendingUp, Activity, Mail, Briefcase, User, DollarSign, Slack } from "lucide-react"
 import { showToast } from "@/components/ui/toast"
 import { StatusBadge, normalizeStatus } from "@/components/ui/status-badge"
+import { TeamMember, Workspace, TeamSubscription, EmailAccount } from "@/lib/types"
+import { canChangeRole, canRemoveMember } from "@/lib/team-utils"
 
 interface TeamsPageProps {
-  workspace: any
-  subscriptions: any[]
+  workspace: Workspace
+  subscriptions: TeamSubscription[]
   darkMode: boolean
-  emailAccounts: any[]
+  emailAccounts: EmailAccount[]
 }
 
 export default function TeamsPage({ workspace, subscriptions, darkMode, emailAccounts }: TeamsPageProps) {
   const [searchQuery, setSearchQuery] = useState("")
   const [activeTab, setActiveTab] = useState<"members" | "usage" | "emails">("members")
   const [showWorkEmailsOnly, setShowWorkEmailsOnly] = useState(true)
+
+  const [slackWebhookUrl, setSlackWebhookUrl] = useState(workspace?.slack_webhook_url ?? "")
+  const [savingSlack, setSavingSlack] = useState(false)
+
+  const handleSaveSlackWebhook = async () => {
+    if (slackWebhookUrl && !slackWebhookUrl.startsWith("https://hooks.slack.com/")) {
+      showToast({ title: "Invalid URL", description: "Must be a valid Slack webhook URL.", variant: "error" })
+      return
+    }
+    setSavingSlack(true)
+    try {
+      const res = await fetch("/api/team/slack-webhook", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ slack_webhook_url: slackWebhookUrl || null }),
+      })
+      if (!res.ok) throw new Error("Failed")
+      showToast({ title: "Saved", description: "Slack webhook updated.", variant: "success" })
+    } catch {
+      showToast({ title: "Error", description: "Could not save webhook.", variant: "error" })
+    } finally {
+      setSavingSlack(false)
+    }
+  }
+
+  const isAdmin = members.some((m: any) => m.email === workspace?.currentUserEmail && m.role === "Admin")
 
   const [teamSettings, setTeamSettings] = useState({
     spendingLimit: 1000,
@@ -26,7 +54,7 @@ export default function TeamsPage({ workspace, subscriptions, darkMode, emailAcc
     },
   })
 
-  const [members, setMembers] = useState([
+  const [members, setMembers] = useState<TeamMember[]>([
     {
       id: 1,
       name: "Joy Anderson",
@@ -139,7 +167,7 @@ export default function TeamsPage({ workspace, subscriptions, darkMode, emailAcc
   }
 
   const handleMemberLeave = (memberId: number) => {
-    const member = members.find((m: any) => m.id === memberId)
+    const member = members.find((m) => m.id === memberId)
     if (!member) return
 
     if (member.subscriptions.length === 0) {
@@ -149,7 +177,7 @@ export default function TeamsPage({ workspace, subscriptions, darkMode, emailAcc
       )
 
       if (confirmDelete) {
-        setMembers(members.filter((m: any) => m.id !== memberId))
+        setMembers(members.filter((m) => m.id !== memberId))
       }
       return
     }
@@ -161,27 +189,24 @@ export default function TeamsPage({ workspace, subscriptions, darkMode, emailAcc
 
     if (action) {
       // Archive member (mark as inactive)
-      setMembers(members.map((m: any) => (m.id === memberId ? { ...m, status: "inactive", leftAt: new Date() } : m)))
+      setMembers(members.map((m) => (m.id === memberId ? { ...m, status: "inactive", leftAt: new Date() } : m)))
     } else {
       // Transfer subscriptions to admin
-      const admin = members.find((m: any) => m.role === "Admin")
+      const admin = members.find((m) => m.role === "Admin")
       if (admin) {
         // In real implementation, would transfer subscriptions
         alert(`Subscriptions transferred to ${admin.name}`)
-        setMembers(members.filter((m: any) => m.id !== memberId))
+        setMembers(members.filter((m) => m.id !== memberId))
       }
     }
   }
 
   const handleDeleteMember = (id: number) => {
-    const member = members.find((m) => m.id === id)
-    if (!member) return
-
-    const adminCount = members.filter((m: any) => m.role === "Admin" && m.status === "active").length
-    if (member.role === "Admin" && adminCount === 1) {
+    const check = canRemoveMember(members, id);
+    if (!check.allowed) {
       showToast({
         title: "Cannot remove last admin",
-        description: "You must have at least one admin in the team. Promote another member to admin first.",
+        description: check.reason || "",
         variant: "error",
       })
       return
@@ -191,16 +216,13 @@ export default function TeamsPage({ workspace, subscriptions, darkMode, emailAcc
   }
 
   const handleChangeRole = (memberId: number, newRole: string) => {
-    const member = members.find((m: any) => m.id === memberId)
-    if (!member) return
-
-    const adminCount = members.filter((m: any) => m.role === "Admin" && m.status === "active").length
-    if (member.role === "Admin" && newRole !== "Admin" && adminCount === 1) {
-      alert("Cannot change role: You must have at least one admin in the team. Promote another member to admin first.")
+    const check = canChangeRole(members, memberId, newRole);
+    if (!check.allowed) {
+      alert(check.reason)
       return
     }
 
-    setMembers(members.map((m: any) => (m.id === memberId ? { ...m, role: newRole } : m)))
+    setMembers(members.map((m) => (m.id === memberId ? { ...m, role: newRole } : m)))
   }
 
   /**
@@ -223,31 +245,31 @@ export default function TeamsPage({ workspace, subscriptions, darkMode, emailAcc
     }
   }
 
-  const getFilteredEmailAccounts = (member: any) => {
+  const getFilteredEmailAccounts = (member: TeamMember) => {
     if (showWorkEmailsOnly) {
-      return member.emailAccounts.filter((acc: any) => acc.isWorkEmail)
+      return member.emailAccounts.filter((acc) => acc.isWorkEmail)
     }
     return member.emailAccounts
   }
 
-  const getFilteredSubscriptions = (member: any) => {
+  const getFilteredSubscriptions = (member: TeamMember) => {
     if (showWorkEmailsOnly) {
-      const workEmails = member.emailAccounts.filter((acc: any) => acc.isWorkEmail).map((acc: any) => acc.email)
-      return member.subscriptions.filter((sub: any) => workEmails.includes(sub.email))
+      const workEmails = member.emailAccounts.filter((acc) => acc.isWorkEmail).map((acc) => acc.email)
+      return member.subscriptions.filter((sub) => workEmails.includes(sub.email))
     }
     return member.subscriptions
   }
 
-  const totalUsage = members.reduce((sum: number, member: any) => {
+  const totalUsage = members.reduce((sum: number, member: TeamMember) => {
     const filteredSubs = getFilteredSubscriptions(member)
-    return sum + filteredSubs.reduce((subSum: number, sub: any) => subSum + sub.usage, 0)
+    return sum + filteredSubs.reduce((subSum: number, sub) => subSum + sub.usage, 0)
   }, 0)
 
-  const totalEmailAccounts = members.reduce((sum: number, member: any) => sum + getFilteredEmailAccounts(member).length, 0)
+  const totalEmailAccounts = members.reduce((sum: number, member: TeamMember) => sum + getFilteredEmailAccounts(member).length, 0)
 
   const getDepartmentSpending = () => {
     const spending: Record<string, number> = {}
-    members.forEach((member: any) => {
+    members.forEach((member: TeamMember) => {
       if (!spending[member.department]) {
         spending[member.department] = 0
       }
@@ -372,6 +394,39 @@ export default function TeamsPage({ workspace, subscriptions, darkMode, emailAcc
           </div>
         </div>
       </div>
+
+      {/* Slack Alerts — admin only */}
+      {isAdmin && (
+        <div
+          className={`${darkMode ? "bg-[#2D3748]" : "bg-white"} p-6 rounded-xl border ${darkMode ? "border-gray-700" : "border-gray-200"}`}
+        >
+          <div className="flex items-center gap-2 mb-4">
+            <Slack className={`w-5 h-5 ${darkMode ? "text-[#FFD166]" : "text-[#1E2A35]"}`} />
+            <h3 className={`text-lg font-semibold ${darkMode ? "text-white" : "text-[#1E2A35]"}`}>Slack Alerts</h3>
+          </div>
+          <p className={`text-sm mb-3 ${darkMode ? "text-gray-400" : "text-gray-600"}`}>
+            Paste a Slack Incoming Webhook URL to receive budget and team alerts in a channel (e.g. #accounting).
+          </p>
+          <div className="flex gap-2">
+            <input
+              type="url"
+              value={slackWebhookUrl}
+              onChange={(e) => setSlackWebhookUrl(e.target.value)}
+              placeholder="https://hooks.slack.com/services/..."
+              className={`flex-1 px-4 py-2 border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-[#FFD166] ${
+                darkMode ? "bg-[#1E2A35] border-gray-700 text-white" : "bg-white border-gray-200 text-[#1E2A35]"
+              }`}
+            />
+            <button
+              onClick={handleSaveSlackWebhook}
+              disabled={savingSlack}
+              className="px-4 py-2 bg-[#007A5C] text-white rounded-lg text-sm font-medium hover:bg-[#007A5C]/90 disabled:opacity-50"
+            >
+              {savingSlack ? "Saving…" : "Save"}
+            </button>
+          </div>
+        </div>
+      )}
 
       {/* Tab Buttons and Work Email Filter Toggle */}
       <div className="flex items-center justify-between">
@@ -600,7 +655,7 @@ export default function TeamsPage({ workspace, subscriptions, darkMode, emailAcc
       {activeTab === "emails" && (
         <div className="space-y-4">
           {members
-            .filter((m: any) => getFilteredEmailAccounts(m).length > 0)
+            .filter((m) => getFilteredEmailAccounts(m).length > 0)
             .map((member) => (
               <div
                 key={member.id}
@@ -627,8 +682,8 @@ export default function TeamsPage({ workspace, subscriptions, darkMode, emailAcc
                 </div>
 
                 <div className="space-y-3">
-                  {getFilteredEmailAccounts(member).map((emailAccount: any, idx: number) => {
-                    const emailSubs = member.subscriptions.filter((sub: any) => sub.email === emailAccount.email)
+                  {getFilteredEmailAccounts(member).map((emailAccount, idx: number) => {
+                    const emailSubs = member.subscriptions.filter((sub) => sub.email === emailAccount.email)
                     const emailSpend = emailSubs.length * 20
                     return (
                       <div
@@ -697,7 +752,7 @@ export default function TeamsPage({ workspace, subscriptions, darkMode, emailAcc
       {activeTab === "usage" && (
         <div className="space-y-6">
           {members
-            .filter((m: any) => m.status === "active")
+            .filter((m) => m.status === "active")
             .map((member) => {
               const filteredSubs = getFilteredSubscriptions(member)
               if (filteredSubs.length === 0 && showWorkEmailsOnly) return null
@@ -730,8 +785,8 @@ export default function TeamsPage({ workspace, subscriptions, darkMode, emailAcc
                   </div>
 
                   <div className="space-y-3">
-                    {filteredSubs.map((sub: any, idx: number) => {
-                      const emailAccount = member.emailAccounts.find((acc: any) => acc.email === sub.email)
+                    {filteredSubs.map((sub, idx: number) => {
+                      const emailAccount = member.emailAccounts.find((acc) => acc.email === sub.email)
                       return (
                         <div
                           key={idx}
