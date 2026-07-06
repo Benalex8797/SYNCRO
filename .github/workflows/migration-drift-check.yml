@@ -45,7 +45,7 @@ jobs:
           cat drift-file-result.json
 
       - name: Upload file drift report
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: drift-file-result
           path: drift-file-result.json
@@ -98,7 +98,7 @@ jobs:
 
       - name: Upload local drift report
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: drift-local-result
           path: drift-local-result.json
@@ -138,7 +138,7 @@ jobs:
 
       - name: Upload remote drift report
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: drift-remote-result
           path: drift-remote-result.json
