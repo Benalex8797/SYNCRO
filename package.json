@@ -10,8 +10,8 @@
     "shared"
   ],
   "scripts": {
-    "typecheck": "npm run typecheck --workspaces --if-present && tsc --noEmit",
-    "typecheck:root": "tsc --noEmit",
+    "typecheck": "npm run typecheck --workspaces --if-present && npx -p typescript tsc --noEmit",
+    "typecheck:root": "npx -p typescript tsc --noEmit",
     "typecheck:backend": "npm run typecheck -w backend",
     "typecheck:client": "npm run typecheck -w client",
     "typecheck:sdk": "npm run typecheck -w sdk",
