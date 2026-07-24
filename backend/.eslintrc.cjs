@@ -43,6 +43,16 @@ module.exports = {
   },
   overrides: [
     {
+      // Backend application code must route logging through the structured
+      // winston logger (src/config/logger). Raw console.* risks leaking PII to
+      // stdout and bypasses log rotation / redaction. See issue #1028.
+      files: ["src/**/*.ts", "services/**/*.ts"],
+      excludedFiles: ["src/config/logger.ts"],
+      rules: {
+        "no-console": "error",
+      },
+    },
+    {
       files: ["*.js", "*.cjs", "*.mjs"],
       parserOptions: {
         project: null,
