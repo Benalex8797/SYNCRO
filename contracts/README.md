@@ -132,6 +132,14 @@ cargo test
 - `record_log` - Appends a log entry (Reminder, Approval, Renewal, Failure, Retry, Cancellation).
 - `get_logs` - Query logs for a specific subscription.
 
+### 7. Recurring Allowance Contract (`contracts/contracts/recurring_allowance/`)
+**Purpose**: Standalone authority contract letting users pre-authorize merchants for capped recurring pulls.
+- `grant_allowance` - Grant capped recurring pull authorization with per-period and absolute limits.
+- `revoke_allowance` - Revoke an active recurring allowance.
+- `consume_allowance` - Merchant pulls authorized tokens within per-period and lifetime caps.
+- `update_allowance` - Update parameters for an active allowance.
+- `get_allowance` / `get_remaining_period_allowance` / `get_remaining_absolute_allowance` - Query allowance status and remaining capacity.
+
 ## Contract Development Roadmap
 
 ### Completed (MVP Stage)
