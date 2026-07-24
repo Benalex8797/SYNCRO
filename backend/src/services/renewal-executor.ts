@@ -6,6 +6,7 @@ import { channelStateService } from './channel-state';
 import { settlementBatcher } from './settlement-batcher';
 import { addMonths, addQuarters, addYears } from 'date-fns';
 import { deriveEphemeralStealthAddress } from '@syncro/shared/crypto';
+import { getRequestId } from '../middleware/requestContext';
 
 interface RenewalRequest {
   subscriptionId: string;
@@ -336,6 +337,8 @@ export class RenewalExecutor {
     stealthAddress?: string,
     ephemeralPubkey?: string,
   ): Promise<void> {
+    const correlationId = getRequestId();
+    
     await supabase.from('renewal_logs').insert({
       subscription_id: subscriptionId,
       user_id: userId,
@@ -343,10 +346,15 @@ export class RenewalExecutor {
       transaction_hash: transactionHash,
       stealth_address: stealthAddress ?? null,
       ephemeral_pubkey: ephemeralPubkey ?? null,
+      correlation_id: correlationId,
       created_at: new Date().toISOString(),
     });
 
-    logger.info('Renewal executed successfully', { subscriptionId, transactionHash });
+    logger.info('Renewal executed successfully', { 
+      subscriptionId, 
+      transactionHash,
+      correlationId 
+    });
 
     // Telegram payment confirmation (non-blocking)
     try {
@@ -389,16 +397,24 @@ export class RenewalExecutor {
     failureReason: string,
     errorMessage?: string
   ): Promise<RenewalResult> {
+    const correlationId = getRequestId();
+    
     await supabase.from('renewal_logs').insert({
       subscription_id: subscriptionId,
       user_id: userId,
       status: 'failed',
       failure_reason: failureReason,
       error_message: errorMessage,
+      correlation_id: correlationId,
       created_at: new Date().toISOString(),
     });
 
-    logger.error('Renewal failed', { subscriptionId, failureReason, errorMessage });
+    logger.error('Renewal failed', { 
+      subscriptionId, 
+      failureReason, 
+      errorMessage,
+      correlationId 
+    });
 
     // Dispatch webhook event
     try {
