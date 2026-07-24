@@ -135,17 +135,18 @@ export const sessionService = {
     }
 
     // 3. Force-sign-out all Supabase sessions for this user at the auth-server level
-    // `signOut(userId, 'global')` invalidates every JWT issued for this user
-    const { error: signOutError } = await (supabase.auth.admin as any).signOut(userId, 'global');
-    if (signOutError) {
-      // The Supabase JS client version installed may not support the two-arg form.
-      // Fall back to a password-less ban/unban cycle which also rotates the refresh token.
-      // TODO: upgrade @supabase/supabase-js to a version that supports signOut(userId, 'global')
-      logger.warn(
-        'supabase.auth.admin.signOut(userId, "global") failed — falling back to updateUserById ban cycle',
-        { userId, error: signOutError.message },
-      );
-      await supabase.auth.admin.updateUserById(userId, { ban_duration: 'none' });
+    // Since we don't have the user's current JWT (we only have the userId), we perform
+    // a password-less ban/unban cycle on the Supabase auth server. Banning a user for a
+    // duration (e.g. '1h') invalidates all their sessions/refresh tokens. We then
+    // immediately restore access by setting ban_duration to 'none' so they can log back in.
+    const { error: banError } = await supabase.auth.admin.updateUserById(userId, { ban_duration: '1h' });
+    if (banError) {
+      logger.error('Failed to initiate ban cycle for global sign-out', { userId, error: banError.message });
+    } else {
+      const { error: unbanError } = await supabase.auth.admin.updateUserById(userId, { ban_duration: 'none' });
+      if (unbanError) {
+        logger.error('Failed to complete unban cycle for global sign-out', { userId, error: unbanError.message });
+      }
     }
 
     // 4. Emit audit event
