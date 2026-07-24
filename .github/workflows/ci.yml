@@ -122,6 +122,20 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v7
 
+      - name: Reject non-npm lockfiles (pnpm-lock.yaml, yarn.lock)
+        # This repo standardises on npm. Committing pnpm or yarn lockfiles
+        # causes non-reproducible installs (issue #557).
+        run: |
+          bad_files=$(find . -not -path './.git/*' \( -name 'pnpm-lock.yaml' -o -name 'yarn.lock' \))
+          if [ -n "$bad_files" ]; then
+            echo "❌ Non-npm lockfile(s) found — only package-lock.json is permitted:"
+            echo "$bad_files"
+            echo ""
+            echo "Remove the file(s) and add them to .gitignore. See issue #557."
+            exit 1
+          fi
+          echo "✅ No pnpm or yarn lockfiles found"
+
       - name: Set up Node.js
         uses: actions/setup-node@v6
         with:
