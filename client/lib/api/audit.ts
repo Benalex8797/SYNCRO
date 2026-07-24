@@ -24,6 +24,7 @@ export type AuditAction =
   | "mfa.disable"
   | "privacy.settings_update"
   | "account.delete_request"
+  | "invoice.upload"
 
 export interface AuditEvent {
   /** Opaque user UUID — never email or username */
