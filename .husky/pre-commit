@@ -1,6 +1,24 @@
 #!/bin/sh
 . "$(dirname "$0")/_/husky.sh"
 
+# ── Secret scanning (issue #1082) ─────────────────────────────────────────────
+# Runs first: a leaked credential is worth blocking the commit over, and there
+# is no point linting a change that must not be committed anyway.
+#
+# Prefers the gitleaks binary when installed (same engine as CI); otherwise
+# falls back to the bundled zero-dependency scanner so the hook works on a
+# fresh clone.
+if command -v gitleaks >/dev/null 2>&1; then
+  gitleaks protect --staged --redact --config .gitleaks.toml --no-banner || {
+    echo ""
+    echo "❌ gitleaks found a secret in your staged changes."
+    echo "   Remediation: docs/security/secret-scanning.md"
+    exit 1
+  }
+else
+  node scripts/scan-secrets.js --staged || exit 1
+fi
+
 # Validate dependencies if package.json changed
 if git diff --cached --name-only | grep -q "client/package.json"; then
   echo "📦 Validating client dependencies..."
@@ -20,4 +38,3 @@ fi
 # Run lint-staged
 npx lint-staged --config backend/.lintstagedrc.json --cwd backend
 npx lint-staged --config client/.lintstagedrc.json --cwd client
-

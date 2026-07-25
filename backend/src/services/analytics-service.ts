@@ -2,68 +2,104 @@ import { supabase } from '../config/database';
 import logger from '../config/logger';
 import { AnalyticsSummary, MonthlySpend, CategorySpend, SubscriptionSpend, Budget } from '../types/analytics';
 import { Subscription } from '../types/reminder';
+import { groupBy, uniqueIds } from '../utils/db-query-metrics';
+
+/**
+ * Subscriptions as read by this service. `cancelled_at` is only present on rows
+ * that have been cancelled, so it is modelled as optional here rather than on
+ * the shared `Subscription` type.
+ */
+type AnalyticsSubscription = Subscription & { cancelled_at?: string | null };
 
 export class AnalyticsService {
   /**
    * Get analytics summary for a user
    */
   async getSummary(userId: string): Promise<AnalyticsSummary> {
+    const summaries = await this.getSummaries([userId]);
+    return summaries.get(userId) ?? this.composeSummary([], []);
+  }
+
+  /**
+   * Get analytics summaries for many users in a fixed number of queries
+   * (issue #1095).
+   *
+   * The per-user path costs two queries, so composing summaries for N users in
+   * a loop cost 2N. This issues one subscriptions query and one budgets query
+   * for the whole set and fans the rows out in memory.
+   */
+  async getSummaries(userIds: readonly string[]): Promise<Map<string, AnalyticsSummary>> {
+    const summaries = new Map<string, AnalyticsSummary>();
+    const ids = uniqueIds(userIds);
+    if (ids.length === 0) return summaries;
+
     try {
-      // 1. Fetch active subscriptions
-      const { data: subscriptions, error: subError } = await supabase
-        .from('subscriptions')
-        .select('*')
-        .eq('user_id', userId)
-        .eq('status', 'active');
+      const [subsRes, budgetsRes] = await Promise.all([
+        supabase.from('subscriptions').select('*').in('user_id', ids).eq('status', 'active'),
+        supabase.from('monthly_budgets').select('*').in('user_id', ids),
+      ]);
 
-      if (subError) throw subError;
+      if (subsRes.error) throw subsRes.error;
+      if (budgetsRes.error) throw budgetsRes.error;
 
-      // 2. Fetch budgets
-      const { data: budgets, error: budgetError } = await supabase
-        .from('monthly_budgets')
-        .select('*')
-        .eq('user_id', userId);
+      const subsByUser = groupBy(
+        (subsRes.data || []) as AnalyticsSubscription[],
+        (sub) => sub.user_id,
+      );
+      const budgetsByUser = groupBy((budgetsRes.data || []) as Budget[], (b) => b.user_id);
 
-      if (budgetError) throw budgetError;
+      for (const userId of ids) {
+        summaries.set(
+          userId,
+          this.composeSummary(subsByUser.get(userId) ?? [], budgetsByUser.get(userId) ?? []),
+        );
+      }
 
-      const typedSubs = (subscriptions || []) as Subscription[];
-      const typedBudgets = (budgets || []) as Budget[];
-
-      // 3. Calculate metrics
-      const totalMonthlySpend = this.calculateTotalMonthlySpend(typedSubs);
-      const categoryBreakdown = this.calculateCategoryBreakdown(typedSubs, totalMonthlySpend);
-      const topSubscriptions = this.getTopSubscriptions(typedSubs);
-      const monthlyTrend = await this.getMonthlyTrend(userId, typedSubs);
-      
-      const overallBudget = typedBudgets.find(b => b.category === null);
-      const budgetStatus = {
-        overall_limit: overallBudget?.budget_limit || null,
-        current_spend: totalMonthlySpend,
-        percentage: overallBudget ? (totalMonthlySpend / overallBudget.budget_limit) * 100 : 0
-      };
-
-      // 4. Upcoming renewals count (next 7 days)
-      const next7Days = new Date();
-      next7Days.setDate(next7Days.getDate() + 7);
-      const upcomingRenewalsCount = typedSubs.filter(sub => {
-        if (!sub.next_billing_date) return false;
-        const renewalDate = new Date(sub.next_billing_date);
-        return renewalDate <= next7Days && renewalDate >= new Date();
-      }).length;
-
-      return {
-        total_monthly_spend: totalMonthlySpend,
-        active_subscriptions: typedSubs.length,
-        upcoming_renewals_count: upcomingRenewalsCount,
-        monthly_trend: monthlyTrend,
-        category_breakdown: categoryBreakdown,
-        top_subscriptions: topSubscriptions,
-        budget_status: budgetStatus
-      };
+      return summaries;
     } catch (error) {
       logger.error('Error fetching analytics summary:', error);
       throw error;
     }
+  }
+
+  /**
+   * Turn one user's subscription and budget rows into a summary. Pure — all DB
+   * access happens in `getSummaries`.
+   */
+  private composeSummary(
+    subscriptions: AnalyticsSubscription[],
+    budgets: Budget[],
+  ): AnalyticsSummary {
+    const totalMonthlySpend = this.calculateTotalMonthlySpend(subscriptions);
+    const categoryBreakdown = this.calculateCategoryBreakdown(subscriptions, totalMonthlySpend);
+    const topSubscriptions = this.getTopSubscriptions(subscriptions);
+    const monthlyTrend = this.getMonthlyTrend(subscriptions);
+
+    const overallBudget = budgets.find(b => b.category === null);
+    const budgetStatus = {
+      overall_limit: overallBudget?.budget_limit || null,
+      current_spend: totalMonthlySpend,
+      percentage: overallBudget ? (totalMonthlySpend / overallBudget.budget_limit) * 100 : 0
+    };
+
+    // Upcoming renewals count (next 7 days)
+    const next7Days = new Date();
+    next7Days.setDate(next7Days.getDate() + 7);
+    const upcomingRenewalsCount = subscriptions.filter(sub => {
+      if (!sub.next_billing_date) return false;
+      const renewalDate = new Date(sub.next_billing_date);
+      return renewalDate <= next7Days && renewalDate >= new Date();
+    }).length;
+
+    return {
+      total_monthly_spend: totalMonthlySpend,
+      active_subscriptions: subscriptions.length,
+      upcoming_renewals_count: upcomingRenewalsCount,
+      monthly_trend: monthlyTrend,
+      category_breakdown: categoryBreakdown,
+      top_subscriptions: topSubscriptions,
+      budget_status: budgetStatus
+    };
   }
 
   /**
@@ -135,9 +171,12 @@ export class AnalyticsService {
   }
 
   /**
-   * Get monthly spend trend for the last 6 months
+   * Get monthly spend trend for the last 6 months.
+   *
+   * Projected from the subscription rows the caller already holds — it never
+   * touched the database, so it no longer takes a userId or returns a promise.
    */
-  private async getMonthlyTrend(userId: string, currentSubs: Subscription[]): Promise<MonthlySpend[]> {
+  private getMonthlyTrend(currentSubs: Subscription[]): MonthlySpend[] {
     // In a real app, this would query historical data or logs.
     // For now, we'll project the trend based on current subscriptions and created_at dates
     const trend: MonthlySpend[] = [];
@@ -203,43 +242,74 @@ export class AnalyticsService {
    * Check if user has exceeded their budget and notify if necessary
    */
   async checkBudgetThreshold(userId: string): Promise<void> {
+    return this.checkBudgetThresholds([userId]);
+  }
+
+  /**
+   * Check budget thresholds for many users and raise any needed alerts
+   * (issue #1095).
+   *
+   * Costs four queries for the whole set — two for the summaries, one
+   * de-duplication read and one batched notification insert — instead of the
+   * three-per-user the single-user path needed.
+   */
+  async checkBudgetThresholds(userIds: readonly string[]): Promise<void> {
+    const ids = uniqueIds(userIds);
+    if (ids.length === 0) return;
+
     try {
-      const summary = await this.getSummary(userId);
-      const { budget_status } = summary;
+      const summaries = await this.getSummaries(ids);
+      const monthStr = new Date().toISOString().substring(0, 7);
 
-      if (budget_status.overall_limit && budget_status.percentage >= 80) {
-        // Trigger notification via riskNotificationService (reusing it or adding a new method)
-        // For now, let's just insert an in-app notification directly
-        const message = budget_status.percentage >= 100 
-          ? `Urgent: You have exceeded your monthly budget of $${budget_status.overall_limit}!`
-          : `Warning: You have used ${budget_status.percentage.toFixed(1)}% of your monthly budget.`;
+      // Users at or over the alert threshold.
+      const breached = ids
+        .map((userId) => ({ userId, summary: summaries.get(userId) }))
+        .filter((entry): entry is { userId: string; summary: AnalyticsSummary } =>
+          !!entry.summary &&
+          !!entry.summary.budget_status.overall_limit &&
+          entry.summary.budget_status.percentage >= 80,
+        );
 
-        // Check if we already notified for this month to prevent spam
-        const monthStr = new Date().toISOString().substring(0, 7);
-        const { data: existing } = await supabase
-          .from('notifications')
-          .select('id')
-          .eq('user_id', userId)
-          .eq('type', 'budget_alert')
-          .like('message', `%${monthStr}%`) // Simple deduplication for the month
-          .limit(1);
+      if (breached.length === 0) return;
 
-        if (!existing || existing.length === 0) {
-          await supabase.from('notifications').insert({
+      // Check which users were already notified this month, to prevent spam.
+      const { data: existing } = await supabase
+        .from('notifications')
+        .select('user_id')
+        .in('user_id', breached.map((entry) => entry.userId))
+        .eq('type', 'budget_alert')
+        .like('message', `%${monthStr}%`); // Simple deduplication for the month
+
+      const alreadyNotified = new Set(
+        ((existing ?? []) as { user_id: string }[]).map((row) => row.user_id),
+      );
+
+      const notifications = breached
+        .filter((entry) => !alreadyNotified.has(entry.userId))
+        .map(({ userId, summary }) => {
+          const { budget_status } = summary;
+          const message = budget_status.percentage >= 100
+            ? `Urgent: You have exceeded your monthly budget of $${budget_status.overall_limit}!`
+            : `Warning: You have used ${budget_status.percentage.toFixed(1)}% of your monthly budget.`;
+
+          logger.info('Budget alert triggered', { userId, percentage: budget_status.percentage });
+
+          return {
             user_id: userId,
             type: 'budget_alert',
             message: `${message} (Current spend: $${budget_status.current_spend.toFixed(2)})`,
-            metadata: { 
+            metadata: {
               month: monthStr,
               percentage: budget_status.percentage,
               limit: budget_status.overall_limit
             },
             read: false,
             created_at: new Date().toISOString()
-          });
-          
-          logger.info('Budget alert triggered', { userId, percentage: budget_status.percentage });
-        }
+          };
+        });
+
+      if (notifications.length > 0) {
+        await supabase.from('notifications').insert(notifications);
       }
     } catch (error) {
       logger.error('Error checking budget threshold:', error);
@@ -259,7 +329,7 @@ export class AnalyticsService {
       if (subError) throw subError;
 
       const typedSubs = (subscriptions || []) as Subscription[];
-      const monthlyTrend = await this.getMonthlyTrend(userId, typedSubs);
+      const monthlyTrend = this.getMonthlyTrend(typedSubs);
       const categoryBreakdown = this.calculateCategoryBreakdown(typedSubs, this.calculateTotalMonthlySpend(typedSubs));
 
       return {
@@ -287,7 +357,7 @@ export class AnalyticsService {
 
       if (subError) throw subError;
 
-      const typedSubs = (subscriptions || []) as Subscription[];
+      const typedSubs = (subscriptions || []) as AnalyticsSubscription[];
       const forecast: MonthlySpend[] = [];
       const now = new Date();
 
