@@ -82,12 +82,19 @@ export class ExchangeRateService {
     const result = await this.getRatesWithSource(baseCurrency);
     const cached = this.cache.get(baseCurrency);
 
+    // `cachedAt` reflects the last *successful live fetch*. When rates came from
+    // the static fallback (no cache entry ever existed) there is no meaningful
+    // timestamp, so we report null rather than `now` — reporting `now` would
+    // falsely signal fresh data and defeat the whole staleness mechanism.
+    const hasCacheEntry = cached !== undefined;
+    const cachedAt = hasCacheEntry ? new Date(cached!.fetchedAt).toISOString() : null;
+    const ageMs = hasCacheEntry ? Date.now() - cached!.fetchedAt : null;
+
     return {
       base: baseCurrency,
       rates: result.rates,
-      cachedAt: cached
-        ? new Date(cached.fetchedAt).toISOString()
-        : new Date().toISOString(),
+      cachedAt,
+      ageMs,
       stale: result.source !== 'live',
       source: result.source,
     };

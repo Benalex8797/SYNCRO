@@ -36,6 +36,22 @@ module.exports = {
   },
   overrides: [
     {
+      // Server-side API route handlers must use the structured logger
+      // (@/lib/logger) rather than raw console.*, which risks leaking PII to
+      // stdout and bypasses Sentry forwarding. See issue #1028.
+      files: ["app/api/**/*.ts", "app/api/**/*.tsx"],
+      rules: {
+        "no-console": "error",
+      },
+    },
+    {
+      // The logger itself is the single sanctioned place that wraps console.*.
+      files: ["lib/logger.ts"],
+      rules: {
+        "no-console": "off",
+      },
+    },
+    {
       files: ["lib/**/*.ts", "components/ui/**/*.tsx"],
       rules: {
         "@typescript-eslint/no-explicit-any": "off",
