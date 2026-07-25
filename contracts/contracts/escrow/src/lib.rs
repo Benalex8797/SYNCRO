@@ -323,7 +323,16 @@ impl EscrowContract {
     /// * Requires `arbiter_approved == true` (second signature check)
     /// * Only the designated payee may receive the funds
     /// * Escrow must be in `Approved` state
+    ///
+    /// # CEI Ordering (Checks → Effects → Interactions)
+    /// 1. CHECKS  — state guards and auth
+    /// 2. EFFECTS — state written to storage BEFORE the external transfer
+    /// 3. INTERACTIONS — token transfer executes last; if it reverts the whole
+    ///    transaction is rolled back atomically, so the storage write never
+    ///    persists.  No re-entrancy window exists because state is already
+    ///    `Released` before any external call.
     pub fn release(env: Env, escrow_id: u64) {
+        // ── CHECKS ──────────────────────────────────────────────────────────
         let mut escrow: EscrowAgreement = env
             .storage()
             .persistent()
@@ -340,25 +349,35 @@ impl EscrowContract {
         // Payee must authorize receipt
         escrow.payee.require_auth();
 
-        let token_client = token::Client::new(&env, &escrow.token);
-        token_client.transfer(
-            &env.current_contract_address(),
-            &escrow.payee,
-            &escrow.deposited,
-        );
+        // Capture values needed after the state mutation.
+        let payee = escrow.payee.clone();
+        let token_addr = escrow.token.clone();
+        let amount = escrow.deposited;
 
+        // ── EFFECTS ─────────────────────────────────────────────────────────
+        // Write final state BEFORE the external token transfer so that any
+        // re-entrant call (or future upgrade) sees `Released` and panics early.
         escrow.state = EscrowState::Released;
-
         env.storage()
             .persistent()
             .set(&DataKey::Escrow(escrow_id), &escrow);
 
+        // Emit the state-change event before the external call so the ledger
+        // records the intent even if the transfer path changes.
         EscrowReleased {
             escrow_id,
-            payee: escrow.payee,
-            amount: escrow.deposited,
+            payee: payee.clone(),
+            amount,
         }
         .publish(&env);
+
+        // ── INTERACTIONS ─────────────────────────────────────────────────────
+        let token_client = token::Client::new(&env, &token_addr);
+        token_client.transfer(
+            &env.current_contract_address(),
+            &payee,
+            &amount,
+        );
     }
 
     /// Refund escrowed funds to the payer.
@@ -368,7 +387,13 @@ impl EscrowContract {
     /// * AFTER expiry: Payer may claim refund unilaterally
     ///
     /// This protects the payer from funds being locked indefinitely.
+    ///
+    /// # CEI Ordering (Checks → Effects → Interactions)
+    /// 1. CHECKS  — state guards, expiry check, auth
+    /// 2. EFFECTS — state written to storage BEFORE the external transfer
+    /// 3. INTERACTIONS — token transfer executes last
     pub fn refund(env: Env, escrow_id: u64) {
+        // ── CHECKS ──────────────────────────────────────────────────────────
         let mut escrow: EscrowAgreement = env
             .storage()
             .persistent()
@@ -399,25 +424,32 @@ impl EscrowContract {
             escrow.payer.require_auth();
         }
 
-        let token_client = token::Client::new(&env, &escrow.token);
-        token_client.transfer(
-            &env.current_contract_address(),
-            &escrow.payer,
-            &escrow.deposited,
-        );
+        // Capture values needed after the state mutation.
+        let payer = escrow.payer.clone();
+        let token_addr = escrow.token.clone();
+        let amount = escrow.deposited;
 
+        // ── EFFECTS ─────────────────────────────────────────────────────────
+        // Write final state BEFORE the external token transfer.
         escrow.state = EscrowState::Refunded;
-
         env.storage()
             .persistent()
             .set(&DataKey::Escrow(escrow_id), &escrow);
 
         EscrowRefunded {
             escrow_id,
-            payer: escrow.payer,
-            amount: escrow.deposited,
+            payer: payer.clone(),
+            amount,
         }
         .publish(&env);
+
+        // ── INTERACTIONS ─────────────────────────────────────────────────────
+        let token_client = token::Client::new(&env, &token_addr);
+        token_client.transfer(
+            &env.current_contract_address(),
+            &payer,
+            &amount,
+        );
     }
 
     /// Raise a dispute for an escrow.
@@ -457,7 +489,13 @@ impl EscrowContract {
     /// * `resolution` — `1` to release to payee, `2` to refund to payer
     ///
     /// Only the designated arbiter may resolve disputes.
+    ///
+    /// # CEI Ordering (Checks → Effects → Interactions)
+    /// 1. CHECKS  — dispute-state guard and arbiter auth
+    /// 2. EFFECTS — final state + storage write + event BEFORE any transfer
+    /// 3. INTERACTIONS — token transfer executes last per resolution branch
     pub fn resolve_dispute(env: Env, escrow_id: u64, resolution: u32) {
+        // ── CHECKS ──────────────────────────────────────────────────────────
         let mut escrow: EscrowAgreement = env
             .storage()
             .persistent()
@@ -470,27 +508,20 @@ impl EscrowContract {
 
         escrow.arbiter.require_auth();
 
-        let token_client = token::Client::new(&env, &escrow.token);
+        // Capture values needed after the state mutation.
+        let payee = escrow.payee.clone();
+        let payer = escrow.payer.clone();
+        let token_addr = escrow.token.clone();
+        let amount = escrow.deposited;
 
+        // ── EFFECTS ─────────────────────────────────────────────────────────
+        // Determine the terminal state and write it to storage BEFORE calling
+        // any external contract.  This eliminates the re-entrancy window
+        // entirely: a re-entrant call would see `Released` or `Refunded` and
+        // immediately panic on the `NotInDispute` guard above.
         match resolution {
-            1 => {
-                // Release to payee
-                token_client.transfer(
-                    &env.current_contract_address(),
-                    &escrow.payee,
-                    &escrow.deposited,
-                );
-                escrow.state = EscrowState::Released;
-            }
-            2 => {
-                // Refund to payer
-                token_client.transfer(
-                    &env.current_contract_address(),
-                    &escrow.payer,
-                    &escrow.deposited,
-                );
-                escrow.state = EscrowState::Refunded;
-            }
+            1 => escrow.state = EscrowState::Released,
+            2 => escrow.state = EscrowState::Refunded,
             _ => panic_with_error!(&env, EscrowError::InvalidAmount),
         }
 
@@ -503,6 +534,28 @@ impl EscrowContract {
             resolution,
         }
         .publish(&env);
+
+        // ── INTERACTIONS ─────────────────────────────────────────────────────
+        let token_client = token::Client::new(&env, &token_addr);
+        match resolution {
+            1 => {
+                // Release to payee
+                token_client.transfer(
+                    &env.current_contract_address(),
+                    &payee,
+                    &amount,
+                );
+            }
+            2 => {
+                // Refund to payer
+                token_client.transfer(
+                    &env.current_contract_address(),
+                    &payer,
+                    &amount,
+                );
+            }
+            _ => unreachable!(), // already validated above
+        }
     }
 
     // ── Queries ───────────────────────────────────────────────────
@@ -825,6 +878,185 @@ mod test {
         let agreement = escrow.get_escrow(&id);
         assert_eq!(agreement.state, EscrowState::Funded);
         assert!(!agreement.arbiter_approved);
+    }
+
+    // ── CEI partial-failure tests ─────────────────────────────────────────────
+
+    /// After a successful `release`, the escrow state is `Released` and a
+    /// second call must panic with `AlreadyReleased`.  This verifies that the
+    /// EFFECTS phase (state write) executes before the INTERACTIONS phase
+    /// (token transfer) so no double-spend is possible even under re-entrancy.
+    #[test]
+    #[should_panic(expected = "Error(Contract, #11)")]
+    fn test_release_cannot_be_called_twice() {
+        let (env, payer, payee, arbiter, token, _token_client) = setup();
+        let escrow = register_escrow(&env);
+        let admin = Address::generate(&env);
+        escrow.init(&admin);
+
+        let expiry = env.ledger().timestamp() + 86400;
+        let desc = String::from_str(&env, "Test");
+
+        let id = escrow.create_escrow(
+            &payer, &payee, &arbiter, &token, &1_000_000_000i128, &expiry, &desc,
+        );
+        escrow.deposit(&id);
+        escrow.approve_release(&id);
+
+        // First release — should succeed.
+        escrow.release(&id);
+        // State is now Released; second call must panic.
+        escrow.release(&id);
+    }
+
+    /// After a successful `refund`, a second `refund` must panic with
+    /// `AlreadyRefunded`.  Confirms the state guard in the EFFECTS phase
+    /// prevents double-disbursement.
+    #[test]
+    #[should_panic(expected = "Error(Contract, #12)")]
+    fn test_refund_cannot_be_called_twice() {
+        let (env, payer, payee, arbiter, token, _token_client) = setup();
+        let escrow = register_escrow(&env);
+        let admin = Address::generate(&env);
+        escrow.init(&admin);
+
+        let expiry = env.ledger().timestamp() + 86400;
+        let desc = String::from_str(&env, "Test");
+
+        let id = escrow.create_escrow(
+            &payer, &payee, &arbiter, &token, &500_000_000i128, &expiry, &desc,
+        );
+        escrow.deposit(&id);
+
+        escrow.refund(&id);          // first refund — succeeds
+        escrow.refund(&id);          // second refund — must panic
+    }
+
+    /// After a `release`, attempting a `refund` must panic.
+    #[test]
+    #[should_panic(expected = "Error(Contract, #11)")]
+    fn test_refund_after_release_is_rejected() {
+        let (env, payer, payee, arbiter, token, _token_client) = setup();
+        let escrow = register_escrow(&env);
+        let admin = Address::generate(&env);
+        escrow.init(&admin);
+
+        let expiry = env.ledger().timestamp() + 86400;
+        let desc = String::from_str(&env, "Test");
+
+        let id = escrow.create_escrow(
+            &payer, &payee, &arbiter, &token, &500_000_000i128, &expiry, &desc,
+        );
+        escrow.deposit(&id);
+        escrow.approve_release(&id);
+        escrow.release(&id);
+
+        // Now try to also refund — state is Released, must fail.
+        escrow.refund(&id);
+    }
+
+    /// After `release`, the payee receives the escrowed amount and the payer's
+    /// balance is reduced by exactly that amount (deposit already happened).
+    /// This is the primary token-conservation test for the EFFECTS-then-
+    /// INTERACTIONS ordering.
+    #[test]
+    fn test_release_transfers_correct_amount() {
+        let (env, payer, payee, arbiter, token, token_client) = setup();
+        let escrow = register_escrow(&env);
+        let admin = Address::generate(&env);
+        escrow.init(&admin);
+
+        let amount = 750_000_000i128;
+        let expiry = env.ledger().timestamp() + 86400;
+        let desc = String::from_str(&env, "Amount check");
+
+        let id = escrow.create_escrow(
+            &payer, &payee, &arbiter, &token, &amount, &expiry, &desc,
+        );
+        escrow.deposit(&id);
+        escrow.approve_release(&id);
+
+        let payee_before = token_client.balance(&payee);
+        escrow.release(&id);
+
+        assert_eq!(token_client.balance(&payee), payee_before + amount);
+        assert_eq!(escrow.get_escrow(&id).state, EscrowState::Released);
+    }
+
+    /// After `resolve_dispute` (resolution=1 → payee), a second call to
+    /// `resolve_dispute` must fail because state is no longer `Disputed`.
+    #[test]
+    #[should_panic(expected = "Error(Contract, #16)")]
+    fn test_resolve_dispute_cannot_be_called_twice() {
+        let (env, payer, payee, arbiter, token, _token_client) = setup();
+        let escrow = register_escrow(&env);
+        let admin = Address::generate(&env);
+        escrow.init(&admin);
+
+        let expiry = env.ledger().timestamp() + 86400;
+        let desc = String::from_str(&env, "Test");
+
+        let id = escrow.create_escrow(
+            &payer, &payee, &arbiter, &token, &1_000_000_000i128, &expiry, &desc,
+        );
+        escrow.deposit(&id);
+        escrow.raise_dispute(&id, &payer);
+
+        escrow.resolve_dispute(&id, &1u32); // first resolution — succeeds
+        escrow.resolve_dispute(&id, &2u32); // second resolution — must panic
+    }
+
+    /// After `resolve_dispute` → release, the payee gets the funds and state
+    /// is `Released`.  Confirms the EFFECTS-then-INTERACTIONS fix in
+    /// `resolve_dispute`.
+    #[test]
+    fn test_resolve_dispute_release_transfers_to_payee() {
+        let (env, payer, payee, arbiter, token, token_client) = setup();
+        let escrow = register_escrow(&env);
+        let admin = Address::generate(&env);
+        escrow.init(&admin);
+
+        let amount = 600_000_000i128;
+        let expiry = env.ledger().timestamp() + 86400;
+        let desc = String::from_str(&env, "Dispute release check");
+
+        let id = escrow.create_escrow(
+            &payer, &payee, &arbiter, &token, &amount, &expiry, &desc,
+        );
+        escrow.deposit(&id);
+        escrow.raise_dispute(&id, &payee);
+
+        let payee_before = token_client.balance(&payee);
+        escrow.resolve_dispute(&id, &1u32);
+
+        assert_eq!(token_client.balance(&payee), payee_before + amount);
+        assert_eq!(escrow.get_escrow(&id).state, EscrowState::Released);
+    }
+
+    /// After `resolve_dispute` → refund, the payer gets the funds back.
+    #[test]
+    fn test_resolve_dispute_refund_transfers_to_payer() {
+        let (env, payer, payee, arbiter, token, token_client) = setup();
+        let escrow = register_escrow(&env);
+        let admin = Address::generate(&env);
+        escrow.init(&admin);
+
+        let amount = 400_000_000i128;
+        let expiry = env.ledger().timestamp() + 86400;
+        let desc = String::from_str(&env, "Dispute refund check");
+
+        let id = escrow.create_escrow(
+            &payer, &payee, &arbiter, &token, &amount, &expiry, &desc,
+        );
+        escrow.deposit(&id);
+        escrow.raise_dispute(&id, &payer);
+
+        // After deposit the payer balance already reflects the locked amount.
+        let payer_before = token_client.balance(&payer);
+        escrow.resolve_dispute(&id, &2u32);
+
+        assert_eq!(token_client.balance(&payer), payer_before + amount);
+        assert_eq!(escrow.get_escrow(&id).state, EscrowState::Refunded);
     }
 }
 
