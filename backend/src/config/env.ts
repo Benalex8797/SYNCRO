@@ -1,7 +1,17 @@
 import { z } from 'zod';
 import logger from './logger';
+// Load durable deployment manifest (if present) so manifest-provided values
+// populate `process.env` prior to validation. This favors manifests over ad-hoc
+// environment strings when available but does not override explicit env vars.
+import { loadManifestIntoEnv } from '../utils/manifest';
 
-const envSchema = z.object({
+// Best-effort manifest load before any validation/parsing.
+loadManifestIntoEnv(process.env.STELLAR_NETWORK ?? 'testnet');
+
+// Exported so the env manifest parity test (tests/env-manifest.test.ts) can
+// introspect which keys are required vs optional and assert they match
+// backend/scripts/env.manifest.js — the single source of truth for var names.
+export const envSchema = z.object({
   // Server
   NODE_ENV: z.enum(['development', 'production', 'test']).default('development'),
   PORT: z.string().default('3001'),
@@ -49,6 +59,9 @@ const envSchema = z.object({
   STRIPE_SECRET_KEY: z.string().optional(),
   STRIPE_WEBHOOK_SECRET: z.string().optional(),
 
+  // Paystack (optional — required for African market users: NG, GH, ZA, KE)
+  PAYSTACK_SECRET_KEY: z.string().optional(),
+
   // Google / Gmail (optional)
   GOOGLE_CLIENT_ID: z.string().optional(),
   GOOGLE_CLIENT_SECRET: z.string().optional(),
@@ -79,6 +92,9 @@ const envSchema = z.object({
 
   // Sentry (optional)
   SENTRY_DSN: z.string().optional(),
+  SENTRY_RELEASE: z.string().optional(),
+  SENTRY_ENVIRONMENT: z.string().optional(),
+  COMMIT_SHA: z.string().optional(),
 
   // Secret Management
   SECRET_PROVIDER_TYPE: z.enum(['local', 'aws', 'vault']).default('local'),
@@ -91,9 +107,27 @@ const envSchema = z.object({
 
   // Risk calculation concurrency (number of simultaneous risk calculations per page)
   RISK_CALC_CONCURRENCY: z.string().default('10'),
+
+  // External Service Defaults
+  EXTERNAL_SERVICE_DEFAULT_TIMEOUT: z.string().default('10000'),
+  EXTERNAL_SERVICE_DEFAULT_RETRIES: z.string().default('3'),
+
+  // Agent HD wallet (Issue #862 — address rotation for pipeline agents)
+  // BIP-39 mnemonic used to derive agent keypairs. Generate with:
+  //   node -e "const b=require('bip39');console.log(b.generateMnemonic(256))"
+  // REQUIRED when ENABLE_BLOCKCHAIN=true; optional in test/blockchain-disabled mode.
+  AGENT_MASTER_SEED: z.string().optional(),
+  // How often agent wallets rotate: "per-task" | "daily" | "weekly" | "manual"
+  AGENT_ROTATION_SCHEDULE: z
+    .enum(['per-task', 'daily', 'weekly', 'manual'])
+    .default('daily'),
 });
 
-function validateEnv() {
+export type BackendEnv = z.infer<typeof envSchema>;
+
+let cachedEnv: BackendEnv | null = null;
+
+export function validateEnv(): BackendEnv {
   const result = envSchema.safeParse(process.env);
 
   if (!result.success) {
@@ -152,10 +186,19 @@ function validateEnv() {
   }
   // ──────────────────────────────────────────────────────────────────────────
 
+  cachedEnv = data;
   return data;
+}
+
+export function getEnv(): BackendEnv {
+  if (cachedEnv) {
+    return cachedEnv;
+  }
+
+  return validateEnv();
 }
 
 // Skip validation in test environment to avoid requiring all vars in unit tests
 export const env = process.env.NODE_ENV === 'test'
-  ? (process.env as unknown as z.infer<typeof envSchema>)
-  : validateEnv();
+  ? (process.env as unknown as BackendEnv)
+  : getEnv();

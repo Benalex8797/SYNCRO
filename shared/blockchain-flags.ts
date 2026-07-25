@@ -1,7 +1,8 @@
 /**
  * shared/blockchain-flags.ts
  *
- * Single source of truth for blockchain / Stellar network feature flags.
+ * Single source of truth for blockchain / Stellar network feature flags,
+ * explorer URL generation, and network-aware utilities.
  *
  * These flags are consumed by both the backend (Node.js) and the client
  * (Next.js / browser) via their respective environment-variable namespaces.
@@ -25,6 +26,60 @@
  */
 
 export type StellarNetwork = 'testnet' | 'mainnet' | 'futurenet';
+
+// ─── Explorer URL Templates ──────────────────────────────────────────────────
+
+const EXPLORER_BASE_URLS: Record<StellarNetwork, string> = {
+  testnet: 'https://stellar.expert/explorer/testnet',
+  mainnet: 'https://stellar.expert/explorer/public',
+  futurenet: 'https://stellar.expert/explorer/futurenet',
+};
+
+const EXPLORER_FALLBACK = 'https://stellar.expert/explorer/public';
+
+/**
+ * Resolve the Stellar expert base URL for the given network.
+ *
+ * @param network - The Stellar network.  Defaults to the resolved active network.
+ * @returns The base explorer URL (without trailing slash).
+ */
+export function resolveExplorerBase(network?: StellarNetwork): string {
+  if (network) return EXPLORER_BASE_URLS[network] ?? EXPLORER_FALLBACK;
+  const active = resolveStellarNetwork();
+  return EXPLORER_BASE_URLS[active] ?? EXPLORER_FALLBACK;
+}
+
+/**
+ * Build a network-aware transaction explorer URL.
+ *
+ * Usage:
+ * ```ts
+ * resolveExplorerUrl('abc123txhash') // → "https://stellar.expert/explorer/testnet/tx/abc123txhash"
+ * resolveExplorerUrl('abc123txhash', 'mainnet') // → "https://stellar.expert/explorer/public/tx/abc123txhash"
+ * ```
+ *
+ * Falls back to `resolveExplorerBase()` when `network` is omitted.
+ *
+ * @param txHash - The transaction hash to link to.
+ * @param network - Optional explicit network.  Defaults to the active network.
+ * @returns The full explorer URL for the transaction.
+ */
+export function resolveExplorerUrl(txHash: string, network?: StellarNetwork): string {
+  const base = resolveExplorerBase(network);
+  return `${base}/tx/${txHash}`;
+}
+
+/**
+ * Build a network-aware account explorer URL.
+ *
+ * @param publicKey - The Stellar public key to link to.
+ * @param network - Optional explicit network.  Defaults to the active network.
+ * @returns The full explorer URL for the account.
+ */
+export function resolveAccountExplorerUrl(publicKey: string, network?: StellarNetwork): string {
+  const base = resolveExplorerBase(network);
+  return `${base}/account/${publicKey}`;
+}
 
 export interface BlockchainFlags {
   /** Whether testnet-only actions are permitted in this environment. */

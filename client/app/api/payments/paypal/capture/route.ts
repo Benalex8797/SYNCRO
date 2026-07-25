@@ -4,7 +4,7 @@
  */
 
 import { type NextRequest } from "next/server"
-import { createApiRoute, createSuccessResponse, ApiErrors, RateLimiters, validateRequestBody } from "@/lib/api/index"
+import { createAuthenticatedApiRoute, createSuccessResponse, ApiErrors, RateLimiters, validateRequestBody } from "@/lib/api/index"
 import { HttpStatus } from "@/lib/api/types"
 import { PaymentService } from "@/lib/payment-service"
 import { z } from "zod"
@@ -14,12 +14,8 @@ const captureSchema = z.object({
     planName: z.string().min(1, "Plan name is required"),
 })
 
-export const POST = createApiRoute(
+export const POST = createAuthenticatedApiRoute(
     async (request: NextRequest, context, user) => {
-        if (!user) {
-            throw ApiErrors.unauthorized("User not authenticated")
-        }
-
         const validated = await validateRequestBody(request, captureSchema)
 
         const paymentService = new PaymentService({
@@ -57,7 +53,6 @@ export const POST = createApiRoute(
         )
     },
     {
-        requireAuth: true,
         rateLimit: RateLimiters.payment,
         idempotent: true,
     }

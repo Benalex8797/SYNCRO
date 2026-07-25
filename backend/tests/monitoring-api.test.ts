@@ -15,6 +15,7 @@ jest.mock('../src/services/monitoring-service', () => ({
     getRetryMetrics: jest.fn(),
     getFailedItems: jest.fn(),
     getPoolMetrics: jest.fn(),
+    getApiLatencyMetrics: jest.fn(),
   },
 }));
 
@@ -129,13 +130,22 @@ app.get('/api/admin/metrics/failed-items', adminAuth, async (req, res) => {
   }
 });
 
+app.get('/api/admin/metrics/api-latency', adminAuth, async (_req, res) => {
+  try {
+    const metrics = await monitoringService.getApiLatencyMetrics();
+    res.json(metrics);
+  } catch {
+    res.status(500).json({ error: 'Failed to fetch API latency metrics' });
+  }
+});
+
 app.get('/api/admin/metrics/ops-summary', adminAuth, async (req, res) => {
   try {
     const windowHours = parseInt(req.query.window as string) || 24;
     if (windowHours < 1 || windowHours > 720) {
       return res.status(400).json({ error: 'window must be between 1 and 720 hours' });
     }
-    const [subscriptions, renewals, activity, trials, throughput, latency, retries] =
+    const [subscriptions, renewals, activity, trials, throughput, latency, retries, apiLatency] =
       await Promise.all([
         monitoringService.getSubscriptionMetrics(),
         monitoringService.getRenewalMetrics(),
@@ -144,6 +154,7 @@ app.get('/api/admin/metrics/ops-summary', adminAuth, async (req, res) => {
         monitoringService.getThroughputMetrics(windowHours),
         monitoringService.getLatencyMetrics(windowHours),
         monitoringService.getRetryMetrics(windowHours),
+        monitoringService.getApiLatencyMetrics(),
       ]);
     res.json({
       generated_at: new Date().toISOString(),
@@ -155,6 +166,7 @@ app.get('/api/admin/metrics/ops-summary', adminAuth, async (req, res) => {
       throughput,
       latency,
       retries,
+      api_latency: apiLatency,
       db_pool: monitoringService.getPoolMetrics(),
     });
   } catch {
@@ -166,6 +178,60 @@ app.get('/api/admin/metrics/ops-summary', adminAuth, async (req, res) => {
 
 const AUTH = { 'x-admin-api-key': 'test-admin-key' };
 const WRONG_AUTH = { 'x-admin-api-key': 'wrong-key' };
+
+// ── GET /api/admin/metrics/api-latency ───────────────────────────────────────
+
+describe('GET /api/admin/metrics/api-latency', () => {
+  const API_LATENCY_FIXTURE = [
+    {
+      family: 'GET /subscriptions',
+      p50_ms: 50,
+      p95_ms: 150,
+      p99_ms: 300,
+      avg_ms: 75,
+      sample_count: 100,
+    },
+    {
+      family: 'POST /webhooks',
+      p50_ms: 100,
+      p95_ms: 200,
+      p99_ms: 400,
+      avg_ms: 120,
+      sample_count: 50,
+    },
+  ];
+
+  it('returns 401 without auth key', async () => {
+    const res = await request(app).get('/api/admin/metrics/api-latency');
+    expect(res.status).toBe(401);
+  });
+
+  it('returns 401 with wrong auth key', async () => {
+    const res = await request(app)
+      .get('/api/admin/metrics/api-latency')
+      .set(WRONG_AUTH);
+    expect(res.status).toBe(401);
+  });
+
+  it('returns 200 with correct shape', async () => {
+    (monitoringService.getApiLatencyMetrics as jest.Mock).mockResolvedValue(API_LATENCY_FIXTURE);
+
+    const res = await request(app).get('/api/admin/metrics/api-latency').set(AUTH);
+
+    expect(res.status).toBe(200);
+    expect(res.body).toHaveLength(2);
+    expect(res.body[0].family).toBe('GET /subscriptions');
+    expect(res.body[0].p50_ms).toBe(50);
+    expect(res.body[0].sample_count).toBe(100);
+  });
+
+  it('returns 500 when service throws', async () => {
+    (monitoringService.getApiLatencyMetrics as jest.Mock).mockRejectedValue(new Error('fail'));
+
+    const res = await request(app).get('/api/admin/metrics/api-latency').set(AUTH);
+    expect(res.status).toBe(500);
+  });
+});
 
 // ── Original access-control suite ────────────────────────────────────────────
 
@@ -498,6 +564,9 @@ describe('GET /api/admin/metrics/ops-summary', () => {
     (monitoringService.getLatencyMetrics as jest.Mock).mockResolvedValue({ notification_delivery_latency: { p50_ms: 100 } });
     (monitoringService.getRetryMetrics as jest.Mock).mockResolvedValue({ total_retried: 1 });
     (monitoringService.getPoolMetrics as jest.Mock).mockReturnValue({ activeConnections: 0 });
+    (monitoringService.getApiLatencyMetrics as jest.Mock).mockResolvedValue([
+      { family: 'GET /subscriptions', p50_ms: 50, sample_count: 10 },
+    ]);
   };
 
   it('returns 401 without auth key', async () => {
@@ -524,8 +593,10 @@ describe('GET /api/admin/metrics/ops-summary', () => {
     expect(res.body).toHaveProperty('throughput');
     expect(res.body).toHaveProperty('latency');
     expect(res.body).toHaveProperty('retries');
+    expect(res.body).toHaveProperty('api_latency');
     expect(res.body).toHaveProperty('db_pool');
     expect(res.body.subscriptions.total_subscriptions).toBe(5);
+    expect(res.body.api_latency).toHaveLength(1);
   });
 
   it('accepts custom window query param and passes it to all sub-metrics', async () => {

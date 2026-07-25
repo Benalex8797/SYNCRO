@@ -1,6 +1,7 @@
 import { supabase } from '../config/database';
 import logger from '../config/logger';
 import { sendSlackAlert } from './slack-service';
+import { calculateMonthlySpend } from '@syncro/shared/subscription-math';
 import { groupBy, uniqueIds } from '../utils/db-query-metrics';
 
 type AlertType = 'budget_warning' | 'budget_exceeded';
@@ -19,25 +20,6 @@ interface SubscriptionRow {
 
 function currentMonth(): string {
   return new Date().toISOString().substring(0, 7); // YYYY-MM
-}
-
-/** Normalize a subscription price to its monthly equivalent. */
-function normalizeToMonthly(price: number, billingCycle: string | null): number {
-  switch ((billingCycle ?? '').toLowerCase()) {
-    case 'yearly':
-    case 'annual':
-      return price / 12;
-    case 'quarterly':
-      return price / 3;
-    case 'weekly':
-      return price * (365 / 7 / 12);
-    default:
-      return price;
-  }
-}
-
-function monthlyTotalFor(subs: readonly SubscriptionRow[]): number {
-  return subs.reduce((sum, sub) => sum + normalizeToMonthly(Number(sub.price), sub.billing_cycle), 0);
 }
 
 /**
@@ -165,7 +147,7 @@ export async function checkBudgetAlertsForUsers(userIds?: readonly string[]): Pr
     for (const profile of profiles) {
       const budget = Number(profile.monthly_budget);
       const threshold = profile.budget_alert_threshold ?? 80;
-      const monthlyTotal = monthlyTotalFor(subsByUser.get(profile.id) ?? []);
+      const monthlyTotal = calculateMonthlySpend(subsByUser.get(profile.id) ?? []);
       const percentage = (monthlyTotal / budget) * 100;
 
       let alertType: AlertType | null = null;
@@ -253,18 +235,7 @@ export async function wouldExceedBudget(
     .eq('user_id', userId)
     .eq('status', 'active');
 
-  const currentTotal = (subs ?? []).reduce((sum, sub) => {
-    const price = Number(sub.price);
-    switch ((sub.billing_cycle ?? '').toLowerCase()) {
-      case 'yearly':
-      case 'annual':
-        return sum + price / 12;
-      case 'quarterly':
-        return sum + price / 3;
-      default:
-        return sum + price;
-    }
-  }, 0);
+  const currentTotal = calculateMonthlySpend(subs ?? []);
 
   const budget = Number(profile.monthly_budget);
   const newTotal = currentTotal + newMonthlyAmount;

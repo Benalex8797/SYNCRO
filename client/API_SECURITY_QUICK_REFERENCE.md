@@ -6,7 +6,7 @@
 
 Before merging any new API route, ensure:
 
-- [ ] Uses `createApiRoute` with `requireAuth: true` for protected endpoints
+- [ ] Uses `createAuthenticatedApiRoute` for protected endpoints
 - [ ] Explicitly verifies resource ownership (don't rely on implicit checks)
 - [ ] Applies appropriate rate limiting (`RateLimiters.standard` or `.strict`)
 - [ ] Uses `ApiErrors` for consistent error responses
@@ -20,13 +20,11 @@ Before merging any new API route, ensure:
 ### Template 1: Simple Protected Route (No Ownership)
 ```typescript
 import { type NextRequest } from "next/server"
-import { createApiRoute, createSuccessResponse, RateLimiters, ApiErrors } from "@/lib/api/index"
+import { createAuthenticatedApiRoute, createSuccessResponse, RateLimiters } from "@/lib/api/index"
 import { HttpStatus } from "@/lib/api/types"
 
-export const GET = createApiRoute(
+export const GET = createAuthenticatedApiRoute(
   async (request: NextRequest, context, user) => {
-    if (!user) throw ApiErrors.unauthorized()
-    
     // Your logic here - user is authenticated
     const data = await fetchUserData(user.id)
     
@@ -37,7 +35,6 @@ export const GET = createApiRoute(
     )
   },
   {
-    requireAuth: true,
     rateLimit: RateLimiters.standard,
   }
 )
@@ -46,7 +43,7 @@ export const GET = createApiRoute(
 ### Template 2: Resource Route with Ownership Check
 ```typescript
 import { type NextRequest } from "next/server"
-import { createApiRoute, createSuccessResponse, RateLimiters, ApiErrors, checkOwnership } from "@/lib/api/index"
+import { createAuthenticatedApiRoute, createSuccessResponse, RateLimiters, ApiErrors, checkOwnership } from "@/lib/api/index"
 import { HttpStatus } from "@/lib/api/types"
 import { createClient } from "@/lib/supabase/server"
 
@@ -56,10 +53,8 @@ export async function DELETE(
 ) {
   const { id } = await params
   
-  return createApiRoute(
+  return createAuthenticatedApiRoute(
     async (_req, context, user) => {
-      if (!user) throw ApiErrors.unauthorized()
-      
       const supabase = await createClient()
       
       // ALWAYS verify ownership first
@@ -85,7 +80,6 @@ export async function DELETE(
       )
     },
     {
-      requireAuth: true,
       rateLimit: RateLimiters.standard,
     }
   )(request)
@@ -184,14 +178,10 @@ export async function PATCH(request, { params }) {
 ### ❌ DON'T: Forget Rate Limiting on Sensitive Operations
 ```typescript
 // VULNERABLE - No rate limiting
-export const POST = createApiRoute(
+export const POST = createAuthenticatedApiRoute(
   async (request, context, user) => {
     await processPayment(user.id, amount)
     return createSuccessResponse({ success: true })
-  },
-  {
-    requireAuth: true,
-    // ❌ No rate limiting
   }
 )
 ```
@@ -199,13 +189,12 @@ export const POST = createApiRoute(
 ### ✅ DO: Apply Appropriate Rate Limiting
 ```typescript
 // SECURE - Rate limiting applied
-export const POST = createApiRoute(
+export const POST = createAuthenticatedApiRoute(
   async (request, context, user) => {
     await processPayment(user.id, amount)
     return createSuccessResponse({ success: true })
   },
   {
-    requireAuth: true,
     rateLimit: RateLimiters.strict, // ✅ Strict for payments
   }
 )
@@ -216,14 +205,12 @@ export const POST = createApiRoute(
 ### ❌ DON'T: Use Generic Error Messages
 ```typescript
 // INCONSISTENT
-if (!user) throw new Error("Not authenticated")
 if (!resource) throw new Error("Not found")
 ```
 
 ### ✅ DO: Use ApiErrors for Consistency
 ```typescript
 // CONSISTENT
-if (!user) throw ApiErrors.unauthorized()
 if (!resource) throw ApiErrors.notFound("Resource")
 if (user.id !== resource.user_id) throw ApiErrors.forbidden()
 ```

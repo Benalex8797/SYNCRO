@@ -222,6 +222,48 @@ RenewalLockReleased { sub_id: u64, released_at: u32 }
 RenewalLockExpired { sub_id: u64, original_locked_at: u32, expired_at: u32 }
 ```
 
+### Renewal Timing — User-Visible Behaviour
+
+Understanding when a renewal can execute helps you avoid unexpected failures.
+
+#### Approval window
+
+Before any renewal executes, you must create an **approval** via `approve_renewal()`. An approval:
+
+- Is **single-use** — once consumed it cannot be reused, even if the renewal fails after the approval check.
+- Has a **ledger-based expiry** (`expires_at` is a ledger sequence number, not a clock time). If the ledger advances past this number before the renewal runs, the approval is void and you must create a new one.
+- Has a **spend limit** (`max_spend`). If the renewal amount exceeds this limit, the approval is rejected and you must create a new approval with a higher limit.
+
+**What this means for you:**
+- Create a fresh approval for each billing cycle.
+- Set `expires_at` far enough in the future to cover any expected delay between approval and execution.
+- If a renewal fails with "Invalid or expired approval", check whether the approval was already consumed (single-use) or has expired, then create a new one.
+
+#### Renewal window
+
+You can optionally restrict renewals to a specific time range using `set_window()`. If a window is set:
+
+- Renewals attempted **before** `billing_start` are rejected with "Outside renewal window".
+- Renewals attempted **after** `billing_end` are rejected with "Outside renewal window".
+- The window uses **Unix timestamps** (seconds since epoch), not ledger sequence numbers.
+
+> **Important:** The approval is consumed *before* the window is checked. If the window check fails, the approval is already marked as used. You must create a new approval before retrying.
+
+If no window is set, there is no time restriction on when a renewal can execute.
+
+**What this means for you:**
+- Set `billing_start` and `billing_end` to bracket your expected billing date (e.g. a 48-hour window centred on the billing date).
+- If a renewal fails with "Outside renewal window", wait until the window opens — but remember you will also need a fresh approval.
+
+#### Approval rejection reason codes
+
+| Code | Meaning | Action required |
+|------|---------|-----------------|
+| `1` | Approval expired | Create a new approval with a later `expires_at` |
+| `2` | Approval already used | Create a new approval for this cycle |
+| `3` | Amount exceeds `max_spend` | Create a new approval with a higher `max_spend` |
+| `4` | Approval not found | Create an approval before triggering renewal |
+
 ## VirtualCard
 
 Non-custodial virtual card for subscription payments.
@@ -429,3 +471,15 @@ const server = new StellarSdk.SorobanRpc.Server('https://soroban-testnet.stellar
 // Read subscription from contract
 const result = await server.simulateTransaction(...);
 ```
+
+## Backend Interface Compatibility
+
+The backend maintains a TypeScript interface manifest at
+`shared/src/soroban-contract-interfaces.ts` that mirrors the function signatures
+declared in the Rust contracts above. Backend invoke bindings in
+`backend/src/blockchain/backend-contract-bindings.ts` must stay aligned with this
+manifest.
+
+CI runs `backend/tests/integration/contract-interface-drift.test.ts` when contracts
+change, causing failures on interface drift between the backend and deployed
+contract signatures.

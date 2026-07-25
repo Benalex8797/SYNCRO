@@ -1,7 +1,7 @@
 import logger from '../config/logger';
 import { NotificationPayload, DeliveryResult } from '../types/reminder';
 import { sanitizeUrl } from '../utils/sanitize-url';
-import { NonRetryableError, RetryableError, withRetry } from '../utils/retry';
+import { ExternalServiceClient } from '../utils/external-service-client';
 
 export interface SlackServiceStatus {
   configured: boolean;
@@ -11,6 +11,7 @@ export interface SlackServiceStatus {
 
 export class SlackService {
   private readonly webhookUrl: string;
+  private readonly client = new ExternalServiceClient('slack');
 
   constructor(webhookUrl?: string) {
     this.webhookUrl = webhookUrl || process.env.SLACK_WEBHOOK_URL || '';
@@ -42,8 +43,6 @@ export class SlackService {
     payload: NotificationPayload,
     options: { maxAttempts?: number } = {},
   ): Promise<DeliveryResult> {
-    const { maxAttempts = 3 } = options;
-
     if (!this.webhookUrl) {
       return {
         success: false,
@@ -53,41 +52,23 @@ export class SlackService {
     }
 
     try {
-      return await withRetry(
-        async () => {
-          const response = await fetch(this.webhookUrl, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(this.buildMessage(payload)),
-          });
+      await this.client.request(this.webhookUrl, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(this.buildMessage(payload)),
+      });
 
-          if (!response.ok) {
-            const responseText = await response.text();
-            const errorMessage = `Slack webhook responded with ${response.status}`;
-            const retryable = response.status === 429 || response.status >= 500;
+      logger.info('Slack notification sent successfully', {
+        subscriptionId: payload.subscription.id,
+        reminderType: payload.reminderType,
+      });
 
-            if (retryable) {
-              throw new RetryableError(`${errorMessage}: ${responseText.slice(0, 200)}`);
-            }
-
-            throw new NonRetryableError(`${errorMessage}: ${responseText.slice(0, 200)}`);
-          }
-
-          logger.info('Slack notification sent successfully', {
-            subscriptionId: payload.subscription.id,
-            reminderType: payload.reminderType,
-          });
-
-          return {
-            success: true,
-            metadata: {
-              status: response.status,
-              channel: 'slack',
-            },
-          };
+      return {
+        success: true,
+        metadata: {
+          channel: 'slack',
         },
-        { maxAttempts },
-      );
+      };
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : String(error);
 
@@ -96,7 +77,7 @@ export class SlackService {
       return {
         success: false,
         error: errorMessage,
-        metadata: { retryable: this.isRetryableError(error) },
+        metadata: { retryable: true }, // ExternalServiceClient handles retries, so we assume failure after retries
       };
     }
   }
@@ -105,8 +86,6 @@ export class SlackService {
     text: string,
     options: { maxAttempts?: number } = {},
   ): Promise<DeliveryResult> {
-    const { maxAttempts = 3 } = options;
-
     if (!this.webhookUrl) {
       return {
         success: false,
@@ -116,40 +95,23 @@ export class SlackService {
     }
 
     try {
-      return await withRetry(
-        async () => {
-          const response = await fetch(this.webhookUrl, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ text }),
-          });
+      await this.client.request(this.webhookUrl, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ text }),
+      });
 
-          if (!response.ok) {
-            const responseText = await response.text();
-            const retryable = response.status === 429 || response.status >= 500;
-            const errorMessage = `Slack webhook responded with ${response.status}: ${responseText.slice(0, 200)}`;
-
-            if (retryable) {
-              throw new RetryableError(errorMessage);
-            }
-
-            throw new NonRetryableError(errorMessage);
-          }
-
-          return {
-            success: true,
-            metadata: { status: response.status, channel: 'slack' },
-          };
-        },
-        { maxAttempts },
-      );
+      return {
+        success: true,
+        metadata: { channel: 'slack' },
+      };
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : String(error);
 
       return {
         success: false,
         error: errorMessage,
-        metadata: { retryable: this.isRetryableError(error) },
+        metadata: { retryable: true },
       };
     }
   }
@@ -217,30 +179,6 @@ export class SlackService {
       title: `Renewal reminder: ${payload.subscription.name}`,
       body: `${payload.subscription.name} renews in ${payload.daysBefore} day${payload.daysBefore === 1 ? '' : 's'}.`,
     };
-  }
-
-  private isRetryableError(error: unknown): boolean {
-    if (error instanceof NonRetryableError) {
-      return false;
-    }
-
-    if (error instanceof RetryableError) {
-      return true;
-    }
-
-    const errorMessage = error instanceof Error ? error.message : String(error);
-    return [
-      /timeout/i,
-      /network/i,
-      /connection/i,
-      /econnrefused/i,
-      /etimedout/i,
-      /temporary/i,
-      /rate limit/i,
-      /503/i,
-      /502/i,
-      /504/i,
-    ].some((pattern) => pattern.test(errorMessage));
   }
 }
 

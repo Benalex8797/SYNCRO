@@ -26,6 +26,7 @@ function getFeedBaseUrl(req: Request): string {
  * GET /api/calendar/feed/:userId/:token.ics
  * Public endpoint for iCal feed (authenticated via token)
  */
+// VALIDATION_BYPASS: Token manually verified
 router.get('/feed/:userId/:token.ics', async (req: Request, res: Response) => {
   try {
     const userId = Array.isArray(req.params.userId) ? req.params.userId[0] : req.params.userId;

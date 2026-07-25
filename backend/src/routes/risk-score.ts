@@ -3,7 +3,7 @@ import { z } from 'zod';
 import { riskDetectionService } from '../services/risk-detection/risk-detection-service';
 import { authenticate, AuthenticatedRequest } from '../middleware/auth';
 import { adminAuth } from '../middleware/admin';
-import { validateRequest } from '../utils/validation';
+import { validate } from '../middleware/validate';
 
 const router: express.Router = express.Router();
 
@@ -17,8 +17,8 @@ const subscriptionParamSchema = z.object({
 /**
  * GET /api/risk-score/:subscriptionId
  */
-router.get('/:subscriptionId', async (req: AuthenticatedRequest, res: Response) => {
-  const { subscriptionId } = validateRequest(subscriptionParamSchema, req.params);
+router.get('/:subscriptionId', validate(subscriptionParamSchema, 'params'), async (req: AuthenticatedRequest, res: Response) => {
+  const { subscriptionId } = req.params;
   const userId = req.user!.id;
 
   const riskScore = await riskDetectionService.getRiskScore(subscriptionId, userId);
@@ -81,8 +81,8 @@ router.post('/recalculate', adminAuth, async (req: AuthenticatedRequest, res: Re
 /**
  * POST /api/risk-score/:subscriptionId/calculate
  */
-router.post('/:subscriptionId/calculate', async (req: AuthenticatedRequest, res: Response) => {
-  const { subscriptionId } = validateRequest(subscriptionParamSchema, req.params);
+router.post('/:subscriptionId/calculate', validate(subscriptionParamSchema, 'params'), async (req: AuthenticatedRequest, res: Response) => {
+  const { subscriptionId } = req.params;
   const userId = req.user!.id;
 
   const assessment = await riskDetectionService.computeRiskLevel(subscriptionId);

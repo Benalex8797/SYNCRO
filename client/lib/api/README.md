@@ -21,11 +21,11 @@ lib/api/
 ### Basic Protected Route
 
 ```typescript
-import { createApiRoute, createSuccessResponse, RateLimiters } from "@/lib/api"
+import { createAuthenticatedApiRoute, createSuccessResponse, RateLimiters } from "@/lib/api/index"
 import { HttpStatus } from "@/lib/api/types"
 import { type NextRequest } from "next/server"
 
-export const GET = createApiRoute(
+export const GET = createAuthenticatedApiRoute(
   async (request: NextRequest, context, user) => {
     // user is guaranteed to be authenticated
     // Your route logic here
@@ -37,7 +37,6 @@ export const GET = createApiRoute(
     )
   },
   {
-    requireAuth: true,
     rateLimit: RateLimiters.standard,
   }
 )
@@ -46,7 +45,7 @@ export const GET = createApiRoute(
 ### Route with Validation
 
 ```typescript
-import { createApiRoute, validateRequestBody, RateLimiters } from "@/lib/api"
+import { createAuthenticatedApiRoute, validateRequestBody, RateLimiters } from "@/lib/api/index"
 import { z } from "zod"
 import { type NextRequest } from "next/server"
 
@@ -55,7 +54,7 @@ const createSchema = z.object({
   email: z.string().email(),
 })
 
-export const POST = createApiRoute(
+export const POST = createAuthenticatedApiRoute(
   async (request: NextRequest, context, user) => {
     const body = await validateRequestBody(request, createSchema)
     
@@ -65,7 +64,6 @@ export const POST = createApiRoute(
     return createSuccessResponse({ success: true })
   },
   {
-    requireAuth: true,
     rateLimit: RateLimiters.standard,
   }
 )
@@ -80,13 +78,12 @@ export async function DELETE(
 ) {
   const { id } = await params
   
-  return createApiRoute(
+  return createAuthenticatedApiRoute(
     async (req, context, user) => {
       // Use id here
       return createSuccessResponse({ deleted: id })
     },
     {
-      requireAuth: true,
       rateLimit: RateLimiters.standard,
     }
   )(request)
@@ -97,7 +94,7 @@ export async function DELETE(
 
 ### 1. Authentication & Authorization
 
-- **Automatic authentication**: Use `requireAuth: true` in route options
+- **Automatic authentication**: Use `createAuthenticatedApiRoute` for protected endpoints
 - **Role-based access**: Use `requireRole: ['admin', 'moderator']`
 - **User context**: Access authenticated user in route handler
 
@@ -117,7 +114,7 @@ checkOwnership(user.id, resourceUserId)
 - **Body, query, and params validation**
 
 ```typescript
-import { validateRequestBody, validateQueryParams, CommonSchemas } from "@/lib/api"
+import { validateRequestBody, validateQueryParams, CommonSchemas } from "@/lib/api/index"
 
 // Validate body
 const body = await validateRequestBody(request, schema)
@@ -147,7 +144,7 @@ throw ApiErrors.validationError("Invalid email", "email")
 - **Response headers**: `X-RateLimit-Limit`, `X-RateLimit-Remaining`, `X-RateLimit-Reset`, `Retry-After` (429)
 
 ```typescript
-import { RateLimiters } from "@/lib/api"
+import { RateLimiters } from "@/lib/api/index"
 
 // High-risk mutations
 rateLimit: RateLimiters.payment
@@ -235,7 +232,7 @@ All API responses follow a standard format:
 
 ## Best Practices
 
-1. **Always use `createApiRoute`** for consistent error handling
+1. **Always use `createApiRoute`** for public endpoints and `createAuthenticatedApiRoute` for protected endpoints
 2. **Validate all inputs** with Zod schemas
 3. **Use appropriate rate limits** based on endpoint sensitivity
 4. **Check ownership** for resource operations
@@ -249,7 +246,7 @@ All API responses follow a standard format:
 The infrastructure is designed to be testable:
 
 ```typescript
-import { createApiRoute } from "@/lib/api"
+import { createApiRoute } from "@/lib/api/index"
 import { createMocks } from "node-mocks-http"
 
 // Mock request
@@ -286,13 +283,12 @@ export async function GET(request: NextRequest) {
 ### After
 
 ```typescript
-export const GET = createApiRoute(
+export const GET = createAuthenticatedApiRoute(
   async (request, context, user) => {
     // user is guaranteed, errors handled automatically
     // ... logic
     return createSuccessResponse({ data })
-  },
-  { requireAuth: true }
+  }
 )
 ```
 
@@ -303,4 +299,3 @@ export const GET = createApiRoute(
 3. **Monitoring**: Add metrics collection
 4. **Caching**: Implement response caching where appropriate
 5. **Database**: Use connection pooling and query optimization
-

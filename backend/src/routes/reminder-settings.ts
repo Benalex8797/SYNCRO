@@ -1,6 +1,6 @@
 import { Router, Response } from 'express';
 import { AuthenticatedRequest } from '../middleware/auth';
-import { validateRequest } from '../utils/validation';
+import { validate } from '../middleware/validate';
 import { reminderSettingsService } from '../services/reminder-settings-service';
 import logger from '../config/logger';
 import { z } from 'zod';
@@ -32,9 +32,9 @@ router.get('/', async (req: AuthenticatedRequest, res: Response) => {
  * PATCH /api/reminder-settings
  * Update reminder settings
  */
-router.patch('/', async (req: AuthenticatedRequest, res: Response) => {
+router.patch('/', validate(reminderSettingsUpdateSchema), async (req: AuthenticatedRequest, res: Response) => {
   try {
-    const validatedData = validateRequest(reminderSettingsUpdateSchema, req.body);
+    const validatedData = req.body;
 
     const updatedSettings = await reminderSettingsService.updateSettings(
       req.user!.id,

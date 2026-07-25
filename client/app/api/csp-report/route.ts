@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server"
 import { z } from "zod"
+import { logger } from "@/lib/logger"
 
 /**
  * CSP Violation Report Schema
@@ -20,19 +21,39 @@ const CspReportSchema = z.object({
 
 /**
  * CSP Violation Report Endpoint
- * 
+ *
  * Receives Content Security Policy violation reports from browsers.
  * These reports help identify policy violations without blocking content (report-only mode).
- * 
+ *
  * Violations are:
  * 1. Persisted to the database for historical analysis
  * 2. Sent to Sentry for real-time monitoring and alerting
  * 3. Aggregated for trend detection and policy tuning
- * 
+ *
  * After 1 week of clean reports, switch to enforcing mode in middleware.ts
  * See: docs/CSP_POLICY_TUNING.md for the complete workflow
  */
+
+// Simple in-memory rate limiter for CSP reports
+const WINDOW_MS = 60 * 1000; // 1 minute
+const MAX_REPORTS_PER_WINDOW = 50;
+let reportCount = 0;
+let windowStart = Date.now();
+
 export async function POST(request: NextRequest) {
+  // Rate limiting check
+  const now = Date.now();
+  if (now - windowStart > WINDOW_MS) {
+    windowStart = now;
+    reportCount = 0;
+  }
+
+  if (reportCount >= MAX_REPORTS_PER_WINDOW) {
+    return NextResponse.json({ success: false, error: 'Rate limit exceeded' }, { status: 429 });
+  }
+
+  reportCount++;
+
   try {
     const rawBody = await request.json()
     const result = CspReportSchema.safeParse(rawBody)
@@ -50,19 +71,31 @@ export async function POST(request: NextRequest) {
 
     const report = result.data["csp-report"]
 
-    // Extract request context
+    // Redact IP address for privacy
+    const rawIp = request.headers.get("x-forwarded-for")?.split(",")[0].trim() ||
+      request.headers.get("x-real-ip");
+
+    // Simple redaction: only keep the first half of the IP or use a static string
+    const redactedIp = rawIp ? '[REDACTED]' : undefined;
+
     const context = {
       userAgent: request.headers.get("user-agent") || undefined,
-      ipAddress: request.headers.get("x-forwarded-for")?.split(",")[0].trim() ||
-        request.headers.get("x-real-ip") ||
-        undefined,
+      ipAddress: redactedIp,
       referer: request.headers.get("referer") || undefined,
-      // Note: User ID would need to be extracted from session/auth token if available
-      // For now, violations are tracked anonymously unless you add auth context
     }
 
+    // Strip query parameters from document-uri to prevent PII leakage
+    let sanitizedUri = report["document-uri"];
+    try {
+      const parsedUrl = new URL(sanitizedUri);
+      sanitizedUri = `${parsedUrl.origin}${parsedUrl.pathname}`;
+    } catch (e) {
+      // If parsing fails, just use the raw string (might be a relative path)
+    }
+    report["document-uri"] = sanitizedUri;
+
     // Log the violation (structured logging)
-    console.error("CSP Violation Report:", {
+    logger.error("CSP Violation Report", {
       documentURI: report["document-uri"],
       violatedDirective: report["violated-directive"],
       blockedURI: report["blocked-uri"],
@@ -88,7 +121,7 @@ export async function POST(request: NextRequest) {
         },
         body: JSON.stringify({ report, context }),
       }).catch(error => {
-        console.error("Failed to persist CSP violation:", error)
+        logger.error("Failed to persist CSP violation", { err: error })
       }),
 
       // Send to Sentry (if configured)
@@ -122,14 +155,14 @@ export async function POST(request: NextRequest) {
             },
           })
         }).catch(error => {
-          console.error("Failed to send CSP violation to Sentry:", error)
+          logger.error("Failed to send CSP violation to Sentry", { err: error })
         })
         : Promise.resolve(),
     ])
 
     return NextResponse.json({ success: true })
   } catch (error) {
-    console.error("Error processing CSP report:", error)
+    logger.error("Error processing CSP report", { err: error })
     return NextResponse.json(
       { success: false, error: "Failed to process report" },
       { status: 500 }

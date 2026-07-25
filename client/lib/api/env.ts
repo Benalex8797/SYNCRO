@@ -16,6 +16,9 @@ const envSchema = z.object({
   NEXT_PUBLIC_SUPABASE_ANON_KEY: z.string().min(1, 'Supabase anon key required').optional(),
 
   // API Configuration
+  // NEXT_PUBLIC_API_URL is the canonical name; NEXT_PUBLIC_API_BASE is the
+  // deprecated alias kept for backward compatibility (see docs/ENVIRONMENT.md).
+  NEXT_PUBLIC_API_URL: z.string().url('Invalid API URL').optional(),
   NEXT_PUBLIC_API_BASE: z.string().url('Invalid API base URL').optional(),
   API_SECRET_KEY: z.string().min(1, 'API secret key required').optional(),
 
@@ -29,10 +32,17 @@ const envSchema = z.object({
   RATE_LIMIT_TAG_MUTATION_MAX: z.string().optional(),
   RATE_LIMIT_TAG_MUTATION_WINDOW_MINUTES: z.string().optional(),
 
-  // External Services
+  // External Services — Stripe
   STRIPE_SECRET_KEY: z.string().optional(),
   STRIPE_WEBHOOK_SECRET: z.string().optional(),
+
+  // External Services — Paystack
   PAYSTACK_SECRET_KEY: z.string().optional(),
+
+  // External Services — PayPal
+  PAYPAL_CLIENT_ID: z.string().optional(),
+  PAYPAL_CLIENT_SECRET: z.string().optional(),
+  PAYPAL_MODE: z.enum(['sandbox', 'live']).default('sandbox'),
 
   // System
   NODE_ENV: z.enum(['development', 'production', 'test']).default('development'),
@@ -68,6 +78,7 @@ export function getEnv(): Env {
     validatedEnv = envSchema.parse({
       NEXT_PUBLIC_SUPABASE_URL: process.env.NEXT_PUBLIC_SUPABASE_URL,
       NEXT_PUBLIC_SUPABASE_ANON_KEY: process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY,
+      NEXT_PUBLIC_API_URL: process.env.NEXT_PUBLIC_API_URL,
       NEXT_PUBLIC_API_BASE: process.env.NEXT_PUBLIC_API_BASE,
       API_SECRET_KEY: process.env.API_SECRET_KEY,
       RATE_LIMIT_ENABLED: process.env.RATE_LIMIT_ENABLED,
@@ -82,6 +93,9 @@ export function getEnv(): Env {
       STRIPE_SECRET_KEY: process.env.STRIPE_SECRET_KEY,
       STRIPE_WEBHOOK_SECRET: process.env.STRIPE_WEBHOOK_SECRET,
       PAYSTACK_SECRET_KEY: process.env.PAYSTACK_SECRET_KEY,
+      PAYPAL_CLIENT_ID: process.env.PAYPAL_CLIENT_ID,
+      PAYPAL_CLIENT_SECRET: process.env.PAYPAL_CLIENT_SECRET,
+      PAYPAL_MODE: process.env.PAYPAL_MODE,
       NODE_ENV: process.env.NODE_ENV,
       LOG_LEVEL: process.env.LOG_LEVEL,
       MAINTENANCE_MODE: process.env.MAINTENANCE_MODE,
@@ -98,7 +112,7 @@ export function getEnv(): Env {
       console.warn('Some environment variables are missing or invalid:', error)
       return {} as Env
     }
-    
+
     if (error instanceof z.ZodError) {
       const missing = error.errors.map((e) => e.path.join('.')).join(', ')
       throw new Error(`Missing or invalid environment variables: ${missing}`)
@@ -138,9 +152,10 @@ export function getApiConfig() {
   const defaultBase =
     process.env.NEXT_PUBLIC_APP_ENV === 'staging' ? stagingApi : productionApi
   return {
-    baseUrl: env.NEXT_PUBLIC_API_BASE || defaultBase,
+    // Prefer the canonical NEXT_PUBLIC_API_URL; fall back to the deprecated
+    // NEXT_PUBLIC_API_BASE so existing deployments keep working.
+    baseUrl: env.NEXT_PUBLIC_API_URL || env.NEXT_PUBLIC_API_BASE || defaultBase,
     secretKey: env.API_SECRET_KEY,
     rateLimitEnabled: env.RATE_LIMIT_ENABLED,
   }
 }
-

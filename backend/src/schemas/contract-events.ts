@@ -1,47 +1,51 @@
 import { z } from 'zod';
 
-export const renewalSuccessSchema = z.object({
+const contractEventPayloadSchema = z.object({
+  schema_version: z.number().int().positive().optional(),
+});
+
+export const renewalSuccessSchema = contractEventPayloadSchema.extend({
   sub_id: z.number(),
 });
 
-export const renewalFailedSchema = z.object({
+export const renewalFailedSchema = contractEventPayloadSchema.extend({
   sub_id: z.number(),
   failure_count: z.number(),
 });
 
-export const stateTransitionSchema = z.object({
+export const stateTransitionSchema = contractEventPayloadSchema.extend({
   sub_id: z.number(),
   new_state: z.enum(['Active', 'Retrying', 'Failed']),
 });
 
-export const approvalCreatedSchema = z.object({
+export const approvalCreatedSchema = contractEventPayloadSchema.extend({
   sub_id: z.number(),
   approval_id: z.string(),
   max_spend: z.string(),
   expires_at: z.string(),
 });
 
-export const approvalRejectedSchema = z.object({
+export const approvalRejectedSchema = contractEventPayloadSchema.extend({
   sub_id: z.number(),
   approval_id: z.string(),
   reason: z.string(),
 });
 
-export const executorAssignedSchema = z.object({
+export const executorAssignedSchema = contractEventPayloadSchema.extend({
   sub_id: z.number(),
   executor: z.string(),
 });
 
-export const executorRemovedSchema = z.object({
+export const executorRemovedSchema = contractEventPayloadSchema.extend({
   sub_id: z.number(),
 });
 
-export const duplicateRenewalRejectedSchema = z.object({
+export const duplicateRenewalRejectedSchema = contractEventPayloadSchema.extend({
   sub_id: z.number(),
   cycle_id: z.string(),
 });
 
-export const lifecycleTimestampUpdatedSchema = z.object({
+export const lifecycleTimestampUpdatedSchema = contractEventPayloadSchema.extend({
   sub_id: z.number(),
   event_kind: z.number(),
   timestamp: z.string(),

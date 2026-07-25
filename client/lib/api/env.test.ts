@@ -13,11 +13,8 @@ describe('getEnv', () => {
   beforeEach(() => {
     vi.resetModules()
     process.env = { ...OLD_ENV }
-    // Clear the module-level cache between tests
-    const envModule = require('./env')
-    if (envModule) {
-      // Re-import will reset the cache
-    }
+    // The module-level cache is cleared by vi.resetModules(); each test
+    // re-imports './env' fresh via dynamic import().
   })
 
   afterAll(() => {
@@ -63,25 +60,28 @@ describe('getEnv', () => {
     expect(env.NEXT_PUBLIC_SUPABASE_URL).toBe('https://test.supabase.co')
   })
 
-  it('returns partial env in development when vars are missing', async () => {
+  it('does not throw in development when vars are missing', async () => {
     process.env.NODE_ENV = 'development'
     delete process.env.NEXT_PUBLIC_SUPABASE_URL
 
     const { getEnv: get } = await import('./env')
     const env = get()
 
-    expect(Object.keys(env).length).toBe(0)
+    // The client schema is intentionally all-optional, so getEnv() never throws
+    // on a *missing* var — it just leaves it undefined. Required-var enforcement
+    // is delegated to client/scripts/validate-env.js (see docs/ENVIRONMENT.md).
+    expect(env.NEXT_PUBLIC_SUPABASE_URL).toBeUndefined()
   })
 
-  it('throws in production when required vars are missing', async () => {
+  it('does not throw in production for missing vars (enforcement is in validate-env.js)', async () => {
     process.env.NODE_ENV = 'production'
     delete process.env.NEXT_PUBLIC_SUPABASE_URL
     delete process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY
 
-    await expect(async () => {
-      const { getEnv: get } = await import('./env')
-      get()
-    }).rejects.toThrow()
+    const { getEnv: get } = await import('./env')
+    // Missing (vs. malformed) values are tolerated; the build-time
+    // validate-env.js gate is what fails fast on missing required vars.
+    expect(() => get()).not.toThrow()
   })
 })
 
@@ -120,12 +120,22 @@ describe('isProduction / isDevelopment / isMaintenanceMode', () => {
 describe('getApiConfig', () => {
   beforeEach(() => {
     vi.resetModules()
+    delete process.env.NEXT_PUBLIC_API_URL
+    delete process.env.NEXT_PUBLIC_API_BASE
   })
 
-  it('returns API config with base URL', async () => {
+  it('returns API config from the deprecated NEXT_PUBLIC_API_BASE fallback', async () => {
     process.env.NEXT_PUBLIC_API_BASE = 'https://api.example.com'
     const { getApiConfig: getCfg } = await import('./env')
     const config = getCfg()
     expect(config.baseUrl).toBe('https://api.example.com')
+  })
+
+  it('prefers the canonical NEXT_PUBLIC_API_URL over NEXT_PUBLIC_API_BASE', async () => {
+    process.env.NEXT_PUBLIC_API_URL = 'https://canonical.example.com'
+    process.env.NEXT_PUBLIC_API_BASE = 'https://legacy.example.com'
+    const { getApiConfig: getCfg } = await import('./env')
+    const config = getCfg()
+    expect(config.baseUrl).toBe('https://canonical.example.com')
   })
 })

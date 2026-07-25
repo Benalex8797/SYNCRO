@@ -2,10 +2,32 @@ import * as crypto from 'crypto';
 import { Request, Response, NextFunction } from 'express';
 import { supabase } from '../config/database';
 import logger from '../config/logger';
-import { setRequestUserId } from './requestContext';
+import { setRequestUserId, setRequestPrivacyMode, setRequestPrivacyPreferences } from './requestContext';
 import * as Sentry from '@sentry/node';
+
+async function loadPrivacyPreferences(userId: string): Promise<void> {
+  try {
+    const { data, error } = await supabase
+      .from('privacy_preferences')
+      .select('*')
+      .eq('user_id', userId)
+      .single();
+    
+    if (!error && data) {
+      setRequestPrivacyMode(!!data.privacy_mode);
+      setRequestPrivacyPreferences(data);
+    } else {
+      setRequestPrivacyMode(false);
+      setRequestPrivacyPreferences(null);
+    }
+  } catch (err) {
+    logger.warn(`Failed to load privacy preferences for user ${userId}: ${err instanceof Error ? err.message : String(err)}`);
+    setRequestPrivacyMode(false);
+    setRequestPrivacyPreferences(null);
+  }
+}
 import { roleService } from '../services/role-service';
-import { auditApiKeyEvent } from '../services/audit-service';
+import { auditApiKeyEvent, emitSecurityEvent } from '../services/audit-service';
 
 export type UserRole = 'owner' | 'admin' | 'member' | 'viewer';
 
@@ -93,12 +115,14 @@ async function authenticateWithApiKey(
 
   req.user = {
     id: keyRecord.user_id,
+    role: 'user' as any,
     authMethod: 'api_key',
     scopes: Array.isArray(keyRecord.scopes) ? keyRecord.scopes : [],
     role: await roleService.getUserRole(keyRecord.user_id),
   };
 
   setRequestUserId(keyRecord.user_id);
+  await loadPrivacyPreferences(keyRecord.user_id);
   next();
   return true;
 }
@@ -141,6 +165,17 @@ export async function authenticate(
 
     if (error || !user) {
       logger.warn('Authentication failed', { error: error?.message });
+      const isExpired = error?.message?.toLowerCase().includes('expired');
+      await emitSecurityEvent(
+        isExpired ? 'auth.jwt_expired' : 'auth.jwt_invalid',
+        {
+          severity: 'medium',
+          resourceType: 'auth',
+          reason: error?.message || 'Invalid or expired token',
+          ipAddress: req.ip,
+          userAgent: req.headers['user-agent'] as string | undefined,
+        },
+      );
       res.status(401).json({
         error: 'Unauthorized',
         message: 'Invalid or expired token',
@@ -160,6 +195,7 @@ export async function authenticate(
       scopes: Array.from(API_KEY_SCOPES),
     };
     setRequestUserId(user.id);
+    await loadPrivacyPreferences(user.id);
     Sentry.setUser({ id: user.id, email: user.email });
 
 
@@ -211,6 +247,7 @@ export async function optionalAuthenticate(
           scopes: Array.from(API_KEY_SCOPES),
         };
         setRequestUserId(user.id);
+        await loadPrivacyPreferences(user.id);
         Sentry.setUser({ id: user.id, email: user.email });
       }
 

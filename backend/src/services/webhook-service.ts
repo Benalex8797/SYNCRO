@@ -10,10 +10,13 @@ import {
   WebhookUpdateInput 
 } from '../types/webhook';
 import { webhookDeadLetterService } from './webhook-dead-letter-service';
+import { ExternalServiceClient } from '../utils/external-service-client';
+import { emitSecurityEvent } from './audit-service';
+import { getRequestId } from '../middleware/requestContext';
 
 export class WebhookService {
-  private readonly MAX_RETRIES = 5;
   private readonly DISABLE_THRESHOLD = 10;
+  private readonly client = new ExternalServiceClient('outbound_webhooks');
 
   /**
    * Register a new webhook
@@ -102,6 +105,8 @@ export class WebhookService {
    * Dispatch an event to all applicable webhooks
    */
   async dispatchEvent<E extends WebhookEventType>(userId: string, eventType: E, data: WebhookEventPayloadMap[E]): Promise<void> {
+    const correlationId = getRequestId();
+    
     try {
       // Find all enabled webhooks for this user subscribed to this event
       const { data: webhooks, error } = await supabase
@@ -112,7 +117,7 @@ export class WebhookService {
         .contains('events', [eventType]);
 
       if (error) {
-        logger.error('Failed to fetch webhooks for dispatch:', error);
+        logger.error('Failed to fetch webhooks for dispatch:', { error, correlationId });
         return;
       }
 
@@ -125,13 +130,16 @@ export class WebhookService {
         type: eventType,
         created: Math.floor(Date.now() / 1000),
         data,
+        correlationId, // Include correlation ID in webhook payload for end-to-end tracing
       };
 
       for (const webhook of webhooks) {
         await this.createDelivery(webhook.id, eventType, eventPayload);
       }
+      
+      logger.debug('Webhook event dispatched', { eventType, webhookCount: webhooks.length, correlationId });
     } catch (err) {
-      logger.error('Error dispatching webhook event:', err);
+      logger.error('Error dispatching webhook event:', { err, eventType, correlationId });
     }
   }
 
@@ -214,7 +222,7 @@ export class WebhookService {
       .digest('hex');
 
     try {
-      const response = await fetch(webhook.url, {
+      const data = await this.client.request<any>(webhook.url, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -224,17 +232,12 @@ export class WebhookService {
         body: payloadString,
       });
 
-      const responseText = await response.text();
-      const isSuccess = response.ok;
-
-      if (isSuccess) {
-        return await this.updateDeliverySuccess(deliveryId, response.status, responseText.substring(0, 1000));
-      } else {
-        return await this.handleDeliveryFailure(deliveryId, webhook.id, response.status, responseText.substring(0, 1000));
-      }
-    } catch (err) {
+      // ExternalServiceClient throws on !response.ok, so we handle it in catch
+      return await this.updateDeliverySuccess(deliveryId, 200, JSON.stringify(data).substring(0, 1000));
+    } catch (err: any) {
+      const status = err.message.includes('status') ? parseInt(err.message.match(/\d+/)?.[0] || '0') : 0;
       const errorMsg = err instanceof Error ? err.message : String(err);
-      return await this.handleDeliveryFailure(deliveryId, webhook.id, 0, errorMsg);
+      return await this.handleDeliveryFailure(deliveryId, webhook.id, status, errorMsg);
     }
   }
 
@@ -292,6 +295,13 @@ export class WebhookService {
         `Exhausted ${this.MAX_RETRIES} retries`,
         errorReason
       );
+      emitSecurityEvent('webhook.dead_letter_exhausted', {
+        severity: 'medium',
+        resourceType: 'webhook',
+        resourceId: webhookId,
+        reason: `Delivery ${deliveryId} exhausted retries (${retryCount})`,
+        details: { deliveryId, retryCount, error: errorReason },
+      });
     } else if (retryCount <= this.MAX_RETRIES) {
       nextStatus = 'retrying';
       // Exponential backoff: 30s, 5m, 30m, 2h, 6h
@@ -337,6 +347,21 @@ export class WebhookService {
 
     if (!enabled) {
       logger.warn(`Webhook ${webhookId} disabled after ${newFailureCount} consecutive failures`);
+      emitSecurityEvent('webhook.auto_disabled', {
+        severity: 'high',
+        resourceType: 'webhook',
+        resourceId: webhookId,
+        reason: `Disabled after ${newFailureCount} consecutive failures`,
+        details: { failureCount: newFailureCount },
+      });
+    } else if (newFailureCount >= this.DISABLE_THRESHOLD / 2) {
+      emitSecurityEvent('webhook.anomalous_failure_rate', {
+        severity: 'medium',
+        resourceType: 'webhook',
+        resourceId: webhookId,
+        reason: `Elevated failure rate: ${newFailureCount}/${this.DISABLE_THRESHOLD} consecutive failures`,
+        details: { failureCount: newFailureCount, disableThreshold: this.DISABLE_THRESHOLD },
+      });
     }
 
     return data as WebhookDelivery;

@@ -6,11 +6,17 @@ Two layers stop credentials reaching the repository:
 
 | Layer | What runs | When |
 | --- | --- | --- |
-| **Pre-commit** | `gitleaks protect --staged`, or `scripts/scan-secrets.js --staged` if gitleaks isn't installed | Every `git commit` |
+| **Local (opt-in)** | `gitleaks protect --staged`, or `node scripts/scan-secrets.js --staged` if gitleaks isn't installed | Before you commit — run it yourself, or wire it into a local hook |
 | **CI** | `gitleaks/gitleaks-action` + `scripts/scan-secrets.js --all` | Every push and PR to `main`/`develop`, plus a weekly full-history sweep |
 
-The pre-commit hook is a convenience — it can be bypassed with `--no-verify`.
-**CI is the gate.**
+The repository ships no commit hooks, so the local check is opt-in and any
+hook you add can be bypassed with `--no-verify`. **CI is the gate.**
+
+To run the local check by hand before committing:
+
+```bash
+node scripts/scan-secrets.js --staged
+```
 
 ## I have a finding. What now?
 
@@ -101,8 +107,8 @@ It deliberately skips lockfiles, `node_modules/`, build output, and binary
 files, and ignores values that reference configuration (`process.env.…`,
 `${{ secrets.… }}`) or are obvious placeholders.
 
-It is a smaller net than gitleaks' full rule set — it exists so the pre-commit
-hook works on a fresh clone with no extra tooling. **CI's gitleaks run is
+It is a smaller net than gitleaks' full rule set — it exists so the local check
+works on a fresh clone with no extra tooling. **CI's gitleaks run is
 authoritative.**
 
 ## Current baseline

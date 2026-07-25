@@ -13,6 +13,15 @@ const eslintConfig = defineConfig([
     "build/**",
     "next-env.d.ts",
   ]),
+  {
+    rules: {
+      // Soft in-editor signal; authoritative enforcement is scripts/check-todos.mjs
+      "no-warning-comments": [
+        "warn",
+        { terms: ["todo", "fixme"], location: "anywhere" },
+      ],
+    },
+  },
 ]);
 
 export default eslintConfig;

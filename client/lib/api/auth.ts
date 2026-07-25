@@ -25,6 +25,21 @@ export async function getAuthenticatedUser(request: NextRequest) {
   return user
 }
 
+export type AuthenticatedUser = NonNullable<Awaited<ReturnType<typeof getAuthenticatedUser>>>
+
+/**
+ * Assert that route infrastructure supplied an authenticated user.
+ * This keeps auth failure responses consistent even when route handlers are
+ * tested with mocked auth functions.
+ */
+export function assertAuthenticatedUser(
+  user: Awaited<ReturnType<typeof getAuthenticatedUser>> | null | undefined
+): asserts user is AuthenticatedUser {
+  if (!user) {
+    throw ApiErrors.unauthorized('Invalid or expired session')
+  }
+}
+
 /**
  * Create request context from request
  */

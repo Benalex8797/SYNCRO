@@ -3,7 +3,7 @@ import { HttpStatus } from "@/lib/api/types"
 import { z } from "zod"
 import { createClient } from "@/lib/supabase/server"
 import { checkOwnership } from "@/lib/api/auth"
-import { ApiErrors, createApiRoute, createSuccessResponse, RateLimiters, validateRequestBody } from "@/lib/api/index"
+import { ApiErrors, createAuthenticatedApiRoute, createSuccessResponse, RateLimiters, validateRequestBody, emitAuditEvent } from "@/lib/api/index"
 
 // Validation schemas
 const updateSubscriptionSchema = z.object({
@@ -25,12 +25,8 @@ export async function DELETE(
 ) {
   const { id } = await params
   
-  return createApiRoute(
+  return createAuthenticatedApiRoute(
     async (req: NextRequest, context, user) => {
-      if (!user) {
-        throw ApiErrors.unauthorized("User not authenticated")
-      }
-
       if (!id) {
         throw ApiErrors.notFound("Subscription")
       }
@@ -61,6 +57,8 @@ export async function DELETE(
         throw ApiErrors.internalError(`Failed to delete subscription: ${error.message}`)
       }
 
+      emitAuditEvent({ userId: user.id, action: "subscription.delete", resourceType: "subscription", resourceId: id })
+
       return createSuccessResponse(
         { message: "Subscription deleted successfully" },
         HttpStatus.OK,
@@ -68,7 +66,6 @@ export async function DELETE(
       )
     },
     {
-      requireAuth: true,
       rateLimit: RateLimiters.standard,
     }
   )(request)
@@ -80,12 +77,8 @@ export async function PATCH(
 ) {
   const { id } = await params
   
-  return createApiRoute(
+  return createAuthenticatedApiRoute(
     async (req: NextRequest, context, user) => {
-      if (!user) {
-        throw ApiErrors.unauthorized("User not authenticated")
-      }
-
       if (!id) {
         throw ApiErrors.notFound("Subscription")
       }
@@ -137,7 +130,6 @@ export async function PATCH(
       )
     },
     {
-      requireAuth: true,
       rateLimit: RateLimiters.standard,
     }
   )(request)

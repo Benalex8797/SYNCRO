@@ -1,6 +1,6 @@
 import { type NextRequest } from "next/server"
 import { z } from "zod"
-import { createApiRoute, createSuccessResponse, validateRequestBody, RateLimiters, ApiErrors } from "@/lib/api/index"
+import { createAuthenticatedApiRoute, createSuccessResponse, validateRequestBody, RateLimiters, ApiErrors, emitAuditEvent } from "@/lib/api/index"
 import { HttpStatus } from "@/lib/api/types"
 import { createClient } from "@/lib/supabase/server"
 import { checkOwnership } from "@/lib/api/auth"
@@ -16,9 +16,8 @@ export async function POST(
 ) {
   const { id } = await params
 
-  return createApiRoute(
+  return createAuthenticatedApiRoute(
     async (req: NextRequest, context, user) => {
-      if (!user) throw ApiErrors.unauthorized("User not authenticated")
       if (!id) throw ApiErrors.notFound("Subscription")
 
       const body = await validateRequestBody(req, pauseSchema)
@@ -60,8 +59,10 @@ export async function POST(
 
       if (error) throw ApiErrors.internalError(`Failed to pause subscription: ${error.message}`)
 
+      emitAuditEvent({ userId: user.id, action: "subscription.pause", resourceType: "subscription", resourceId: id })
+
       return createSuccessResponse({ subscription: data }, HttpStatus.OK, context.requestId)
     },
-    { requireAuth: true, rateLimit: RateLimiters.standard }
+    { rateLimit: RateLimiters.standard }
   )(request)
 }

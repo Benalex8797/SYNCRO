@@ -311,6 +311,26 @@ describe('EventListener - Reconnection Logic', () => {
       expect(events.length).toBe(1);
     });
 
+    it('should skip unsupported contract event schema versions', async () => {
+      const unsupportedEvent = {
+        type: 'RenewalSuccess',
+        ledger: 150,
+        txHash: 'tx-unsupported',
+        contractId: 'test-contract-id',
+        topics: [],
+        value: { sub_id: 42, schema_version: 2 },
+      };
+
+      jest.clearAllMocks();
+      const mod = await import('../src/services/event-listener');
+      const schemaListener = new mod.EventListener();
+
+      const processed = await (schemaListener as any).processEvents([unsupportedEvent]);
+
+      expect(processed).toEqual([]);
+      expect(supabase.from).not.toHaveBeenCalled();
+    });
+
     it('should retry failed event saves', async () => {
       const mockProcessedEvent = {
         sub_id: 1,

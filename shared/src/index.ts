@@ -1,5 +1,5 @@
 /**
- * @synchro/shared
+ * @syncro/shared
  * 
  * Shared domain models and types for Synchro application
  * Prevents type drift between client, backend, and SDK
@@ -23,8 +23,35 @@ export * from './user';
 // Analytics models
 export * from './analytics';
 
+// Shared subscription calculations
+export * from './subscription-math';
+
+// Shared security helpers
+export * from './security';
+
 // Common utilities
 export * from './common';
 
 // RPC Client
 export * from './rpc-client';
+
+// Sentry shared config
+export * from './sentry';
+
+// Soroban contract interfaces (backend ↔ contract compatibility)
+export * from './soroban-contract-interfaces';
+
+// Crypto utilities
+export * from './crypto';
+
+// Stealth address deterministic derivation
+export * from './crypto/stealth-derive';
+
+// Stealth meta-address format and helpers
+export * from './types/stealth';
+
+// Stealth payment audit types
+export * from './types/stealth-payment';
+
+// Stealth payment audit types
+export * from './types/stealth-payment';

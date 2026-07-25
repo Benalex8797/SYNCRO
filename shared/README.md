@@ -1,4 +1,4 @@
-# @synchro/shared
+# @syncro/shared
 
 Shared domain models and types for the Synchro application ecosystem.
 
@@ -30,7 +30,7 @@ import {
   CreateSubscriptionInput,
   Payment,
   UserProfile 
-} from '@synchro/shared';
+} from '@syncro/shared';
 
 // Use in your code with full type safety
 const subscription: Subscription = {
@@ -74,7 +74,7 @@ npm run watch
 When migrating existing code to use shared types:
 
 1. Install the package in your workspace
-2. Replace local type definitions with imports from `@synchro/shared`
+2. Replace local type definitions with imports from `@syncro/shared`
 3. Update any transformation functions to use the shared types
 4. Run type checking to catch any mismatches
 5. Update tests to use shared types

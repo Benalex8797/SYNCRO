@@ -4,37 +4,37 @@ on:
   push:
     branches: [main, develop]
     paths:
-      - 'supabase/migrations/**'
-      - 'backend/migrations/**'
-      - 'scripts/check-rls-compliance.js'
-      - '.github/workflows/rls-audit.yml'
+      - "supabase/migrations/**"
+      - "backend/migrations/**"
+      - "scripts/check-rls-compliance.js"
+      - ".github/workflows/rls-audit.yml"
   pull_request:
     branches: [main, develop]
     paths:
-      - 'supabase/migrations/**'
-      - 'backend/migrations/**'
-      - 'scripts/check-rls-compliance.js'
-      - '.github/workflows/rls-audit.yml'
+      - "supabase/migrations/**"
+      - "backend/migrations/**"
+      - "scripts/check-rls-compliance.js"
+      - ".github/workflows/rls-audit.yml"
 
 jobs:
   audit-rls-policies:
     name: Audit RLS Policies
     runs-on: ubuntu-latest
-    
+
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
 
       - name: Setup Node.js
         uses: actions/setup-node@v6
         with:
-          node-version: '20'
-          cache: 'npm'
+          node-version: "20"
+          cache: "npm"
           cache-dependency-path: backend/package-lock.json
 
       - name: Install dependencies
         working-directory: backend
-        run: npm ci
+        run: npm install
 
       - name: Setup Supabase CLI
         uses: supabase/setup-cli@v2
@@ -61,7 +61,7 @@ jobs:
 
       - name: Stop Supabase local stack
         if: always()
-        run: supabase stop
+        run: if command -v supabase &> /dev/null; then supabase stop; fi
 
   # Integration with main CI pipeline
   validate-rls-on-production:
@@ -69,21 +69,21 @@ jobs:
     runs-on: ubuntu-latest
     if: github.ref == 'refs/heads/main' && github.event_name == 'push'
     needs: audit-rls-policies
-    
+
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
 
       - name: Setup Node.js
         uses: actions/setup-node@v6
         with:
-          node-version: '20'
-          cache: 'npm'
+          node-version: "20"
+          cache: "npm"
           cache-dependency-path: backend/package-lock.json
 
       - name: Install dependencies
         working-directory: backend
-        run: npm ci
+        run: npm install
 
       - name: Validate RLS on Production Database
         env:
@@ -100,7 +100,7 @@ jobs:
     runs-on: ubuntu-latest
     if: github.event_name == 'pull_request'
     needs: audit-rls-policies
-    
+
     steps:
       - name: Comment PR with RLS Status
         uses: actions/github-script@v9

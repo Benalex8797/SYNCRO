@@ -11,6 +11,7 @@ import { SUPPORTED_CURRENCIES } from '../constants/currencies';
 import logger from '../config/logger';
 import { BadRequestError } from '../errors';
 import { validateRequest } from '../utils/validation';
+import { cursorPaginationSchema, safeUrlSchema } from '../schemas/common';
 
 const router = Router();
 
@@ -28,21 +29,6 @@ const upload = multer({
 });
 
 // ── Zod schemas ───────────────────────────────────────────────────────────────
-
-const safeUrlSchema = z
-  .string()
-  .url('Must be a valid URL')
-  .refine(
-    (val) => {
-      try {
-        const { protocol } = new URL(val);
-        return protocol === 'http:' || protocol === 'https:';
-      } catch {
-        return false;
-      }
-    },
-    { message: 'URL must use http or https protocol' }
-  );
 
 const createSubscriptionSchema = z.object({
   name: z.string().min(1),
@@ -108,31 +94,48 @@ router.use(authenticate);
  * GET /api/subscriptions
  * List user's subscriptions
  */
+router.get('/encryption-summary', async (req: AuthenticatedRequest, res: Response) => {
+  const summary = await subscriptionService.getSubscriptionEncryptionSummary(req.user!.id);
+  res.json({ success: true, data: summary });
+});
+
 router.get('/', async (req: AuthenticatedRequest, res: Response) => {
-  const { status, category, limit, cursor } = req.query;
-  
-  const limitNum = limit ? parseInt(limit as string, 10) : 20;
-  if (isNaN(limitNum) || limitNum < 1 || limitNum > 100) {
-    throw new BadRequestError('Limit must be a number between 1 and 100');
+  try {
+    const { status, category, cursor, encrypted_only } = req.query;
+    const pagination = validateRequest(cursorPaginationSchema, {
+      limit: req.query.limit,
+      cursor: req.query.cursor,
+    });
+
+    const result = await subscriptionService.listSubscriptions(req.user!.id, {
+      status: status as any,
+      category: category as string,
+      encryptedOnly: encrypted_only === 'true',
+      limit: pagination.limit,
+      cursor: pagination.cursor,
+    });
+
+    res.json({
+      success: true,
+      data: result.subscriptions,
+      pagination: {
+        total: result.total,
+        limit: pagination.limit,
+        hasMore: result.hasMore,
+        nextCursor: result.nextCursor ?? null,
+      },
+    });
+  } catch (error: any) {
+    if (error.name === 'PaginationError') {
+      throw new BadRequestError(error.message);
+    }
+    throw error;
   }
+});
 
-  const result = await subscriptionService.listSubscriptions(req.user!.id, {
-    status: status as any,
-    category: category as string,
-    limit: limitNum,
-    cursor: cursor as string,
-  });
-
-  res.json({
-    success: true,
-    data: result.subscriptions,
-    pagination: {
-      total: result.total,
-      limit: limitNum,
-      hasMore: result.hasMore,
-      nextCursor: result.nextCursor ?? null,
-    },
-  });
+router.post('/encrypt-all', async (req: AuthenticatedRequest, res: Response) => {
+  const result = await subscriptionService.encryptAllUnencryptedSubscriptions(req.user!.id);
+  res.json({ success: true, data: { encryptedCount: result.count } });
 });
 
 /**
@@ -142,13 +145,13 @@ router.get('/', async (req: AuthenticatedRequest, res: Response) => {
 router.post('/', async (req: AuthenticatedRequest, res: Response) => {
   const idempotencyKey = req.headers['idempotency-key'] as string;
   const validatedData = validateRequest(createSubscriptionSchema, req.body);
-  
+
   const result = await subscriptionService.createSubscription(
     req.user!.id,
     validatedData,
     idempotencyKey
   );
-  
+
   const statusCode = result.syncStatus === 'failed' ? 207 : 201;
   res.status(statusCode).json({
     success: true,
@@ -177,14 +180,14 @@ router.get('/:id', validateSubscriptionOwnership, async (req: AuthenticatedReque
 router.patch('/:id', validateSubscriptionOwnership, async (req: AuthenticatedRequest, res: Response) => {
   const expectedVersion = req.headers['if-match'] as string;
   const validatedData = validateRequest(updateSubscriptionSchema, req.body);
-  
+
   const result = await subscriptionService.updateSubscription(
     req.user!.id,
     req.params.id,
     validatedData,
     expectedVersion ? parseInt(expectedVersion, 10) : undefined
   );
-  
+
   const statusCode = result.syncStatus === 'failed' ? 207 : 200;
   res.status(statusCode).json({
     success: true,
@@ -203,11 +206,31 @@ router.patch('/:id', validateSubscriptionOwnership, async (req: AuthenticatedReq
  */
 router.delete('/:id', validateSubscriptionOwnership, async (req: AuthenticatedRequest, res: Response) => {
   const result = await subscriptionService.deleteSubscription(req.user!.id, req.params.id);
-  
+
   const statusCode = result.syncStatus === 'failed' ? 207 : 200;
   res.status(statusCode).json({
     success: true,
     message: 'Subscription deleted',
+    blockchain: {
+      synced: result.syncStatus === 'synced',
+      transactionHash: result.blockchainResult?.transactionHash,
+      error: result.blockchainResult?.error,
+    },
+  });
+});
+
+/**
+ * POST /api/subscriptions/:id/restore
+ * Restore a soft-deleted subscription
+ */
+router.post('/:id/restore', validateSubscriptionOwnership, async (req: AuthenticatedRequest, res: Response) => {
+  const result = await subscriptionService.restoreSubscription(req.user!.id, req.params.id);
+
+  const statusCode = result.syncStatus === 'failed' ? 207 : 200;
+  res.status(statusCode).json({
+    success: true,
+    message: 'Subscription restored',
+    data: result.subscription,
     blockchain: {
       synced: result.syncStatus === 'synced',
       transactionHash: result.blockchainResult?.transactionHash,
@@ -292,7 +315,7 @@ router.get('/:id/cooldown-status', validateSubscriptionOwnership, async (req: Au
  */
 router.post('/:id/cancel', validateSubscriptionOwnership, async (req: AuthenticatedRequest, res: Response) => {
   const result = await subscriptionService.cancelSubscription(req.user!.id, req.params.id);
-  
+
   const statusCode = result.syncStatus === 'failed' ? 207 : 200;
   res.status(statusCode).json({
     success: true,
@@ -310,7 +333,7 @@ router.post('/:id/cancel', validateSubscriptionOwnership, async (req: Authentica
  */
 router.post('/:id/pause', validateSubscriptionOwnership, async (req: AuthenticatedRequest, res: Response) => {
   const { resumeAt, reason } = validateRequest(pauseSchema, req.body);
-  
+
   if (resumeAt && new Date(resumeAt) <= new Date()) {
     throw new BadRequestError('resumeAt must be a future date');
   }
@@ -339,7 +362,7 @@ router.post('/:id/pause', validateSubscriptionOwnership, async (req: Authenticat
  */
 router.post('/:id/resume', validateSubscriptionOwnership, async (req: AuthenticatedRequest, res: Response) => {
   const result = await subscriptionService.resumeSubscription(req.user!.id, req.params.id);
-  
+
   const statusCode = result.syncStatus === 'failed' ? 207 : 200;
   res.status(statusCode).json({
     success: true,
@@ -357,7 +380,7 @@ router.post('/:id/resume', validateSubscriptionOwnership, async (req: Authentica
  */
 router.post('/bulk', validateBulkSubscriptionOwnership, async (req: AuthenticatedRequest, res: Response) => {
   const { operation, ids, data } = validateRequest(bulkOperationSchema, req.body);
-  
+
   const results = [];
   const errors = [];
 
@@ -388,7 +411,7 @@ router.post('/bulk', validateBulkSubscriptionOwnership, async (req: Authenticate
  */
 router.patch('/:id/notification-preferences', validateSubscriptionOwnership, async (req: AuthenticatedRequest, res: Response) => {
   const validatedData = validateRequest(notificationPreferencesSchema, req.body);
-  
+
   const preferences = await notificationPreferenceService.upsertPreferences(
     req.params.id,
     validatedData
@@ -402,7 +425,7 @@ router.patch('/:id/notification-preferences', validateSubscriptionOwnership, asy
  */
 router.post('/:id/snooze', validateSubscriptionOwnership, async (req: AuthenticatedRequest, res: Response) => {
   const { until } = validateRequest(snoozeSchema, req.body);
-  
+
   const preferences = await notificationPreferenceService.snooze(req.params.id, until);
 
   res.json({

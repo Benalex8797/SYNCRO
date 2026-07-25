@@ -1,5 +1,7 @@
 import { createClient } from '@/lib/supabase/server'
 import { buildQueryWarning, type DataLoadWarning } from '@/lib/dashboard-bootstrap'
+import { fetchConsolidationSuggestions, filterDismissedSuggestions } from '@/lib/dashboard-data'
+import type { ConsolidationSuggestion } from '@/lib/types'
 
 export type InitialPriceChange = {
   id: string
@@ -14,13 +16,13 @@ export type InitialPriceChange = {
 }
 
 export type InitialDataResult = {
-  subscriptions: any[]
-  emailAccounts: any[]
-  payments: any[]
-  priceChanges: InitialPriceChange[]
-  consolidationSuggestions: any[]
-  warnings: DataLoadWarning[]
-  isDemo: boolean
+  subscriptions: any[];
+  emailAccounts: any[];
+  payments: any[];
+  priceChanges: InitialPriceChange[];
+  consolidationSuggestions: any[];
+  warnings: DataLoadWarning[];
+  isDemo: boolean;
 }
 
 function transformSubscription(dbSub: any): any {
@@ -40,6 +42,7 @@ function transformSubscription(dbSub: any): any {
     lastUsedAt: dbSub.last_used_at,
     hasApiKey: dbSub.has_api_key || false,
     isTrial: dbSub.is_trial || false,
+    is_encrypted: dbSub.is_encrypted ?? false,
     trialEndsAt: dbSub.trial_ends_at,
     priceAfterTrial: dbSub.price_after_trial,
     source: dbSub.source || 'manual',
@@ -76,6 +79,40 @@ function normalizePriceChange(
     annualImpact: (newPrice - oldPrice) * 12,
     percentChange: oldPrice > 0 ? ((newPrice - oldPrice) / oldPrice) * 100 : 0,
   }
+}
+
+const FLAGGABLE_CATEGORIES = ['ai_tools', 'entertainment', 'productivity', 'design', 'music']
+
+const BUNDLE_SUGGESTIONS: Record<string, string> = {
+  ai_tools: 'one AI subscription',
+  entertainment: 'a streaming bundle',
+  productivity: 'a single productivity suite',
+  design: 'one design tool',
+  music: 'one music service',
+}
+
+function buildConsolidationSuggestions(subscriptions: any[]): ConsolidationSuggestion[] {
+  const byCategory: Record<string, any[]> = {}
+
+  for (const sub of subscriptions) {
+    const cat = sub.category
+    if (!cat || !FLAGGABLE_CATEGORIES.includes(cat)) continue
+    ;(byCategory[cat] ??= []).push(sub)
+  }
+
+  return Object.entries(byCategory)
+    .filter(([, group]) => group.length >= 2)
+    .map(([category, group]) => {
+      const total = group.reduce((sum: number, s: any) => sum + s.price, 0)
+      const cheapest = Math.min(...group.map((s: any) => s.price))
+      return {
+        id: `consolidation_${category}`,
+        category: category.replace('_', ' '),
+        services: group.map((s: any) => s.name),
+        suggestedBundle: BUNDLE_SUGGESTIONS[category] ?? 'a single plan',
+        savings: (total - cheapest).toFixed(2),
+      }
+    })
 }
 
 export async function getInitialData(): Promise<InitialDataResult> {
@@ -199,12 +236,21 @@ export async function getInitialData(): Promise<InitialDataResult> {
     )
   }
 
+  let consolidationSuggestions: ConsolidationSuggestion[]
+  try {
+    const raw = await fetchConsolidationSuggestions(user.id)
+    consolidationSuggestions = await filterDismissedSuggestions(user.id, raw)
+  } catch (err) {
+    warnings.push(buildQueryWarning('consolidation_suggestions', err))
+    consolidationSuggestions = []
+  }
+
   return {
     subscriptions,
     emailAccounts,
     payments,
     priceChanges,
-    consolidationSuggestions: [],
+    consolidationSuggestions: buildConsolidationSuggestions(subscriptions),
     warnings,
     isDemo: false,
   }

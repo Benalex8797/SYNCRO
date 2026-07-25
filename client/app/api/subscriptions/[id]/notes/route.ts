@@ -1,5 +1,5 @@
 import { type NextRequest } from "next/server"
-import { createApiRoute, createSuccessResponse, validateRequestBody, RateLimiters, ApiErrors, checkOwnership } from "@/lib/api/index"
+import { createAuthenticatedApiRoute, createSuccessResponse, validateRequestBody, RateLimiters, ApiErrors, checkOwnership } from "@/lib/api/index"
 import { HttpStatus } from "@/lib/api/types"
 import { z } from "zod"
 import { updateSubscriptionNotes } from "@/lib/supabase/tags"
@@ -15,10 +15,8 @@ export async function PATCH(
 ) {
   const { id } = await params
 
-  return createApiRoute(
+  return createAuthenticatedApiRoute(
     async (_req, context, user) => {
-      if (!user) throw ApiErrors.unauthorized()
-
       const { notes } = await validateRequestBody(request, notesSchema)
 
       const supabase = await createClient()
@@ -41,6 +39,6 @@ export async function PATCH(
 
       return createSuccessResponse({ updated: true }, HttpStatus.OK, context.requestId)
     },
-    { requireAuth: true, rateLimit: RateLimiters.standard },
+    { rateLimit: RateLimiters.standard },
   )(request)
 }

@@ -1,5 +1,14 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { requireRole, requireMinRole, withAuth, getAuthenticatedUser, UserRole, ROLE_HIERARCHY } from './auth'
+import {
+  assertAuthenticatedUser,
+  requireRole,
+  requireMinRole,
+  withAuth,
+  getAuthenticatedUser,
+  UserRole,
+  ROLE_HIERARCHY,
+} from './auth'
+import { createAuthenticatedApiRoute, createSuccessResponse } from './index'
 import { NextRequest, NextResponse } from 'next/server'
 import { createClient } from '@/lib/supabase/server'
 
@@ -58,6 +67,12 @@ describe('Auth Middleware', () => {
       await expect(getAuthenticatedUser(new NextRequest('http://localhost'))).rejects.toThrow(
         'Invalid or expired session'
       )
+    })
+  })
+
+  describe('assertAuthenticatedUser', () => {
+    it('throws the shared unauthorized error when a protected route has no user', () => {
+      expect(() => assertAuthenticatedUser(null)).toThrow('Invalid or expired session')
     })
   })
 
@@ -256,6 +271,43 @@ describe('Auth Middleware', () => {
       await expect(
         withAuth(handler, { requireRole: ['admin'] })(new NextRequest('http://localhost'))
       ).rejects.toThrow('Requires one of: admin')
+      expect(handler).not.toHaveBeenCalled()
+    })
+  })
+
+  describe('createAuthenticatedApiRoute', () => {
+    it('passes the authenticated user to the handler', async () => {
+      const mockUser = { id: '123', email: 'test@example.com' }
+      vi.mocked(createClient).mockResolvedValue(mockSupabaseWith({ user: mockUser }) as any)
+
+      const handler = vi.fn().mockResolvedValue(createSuccessResponse({ ok: true }))
+      const route = createAuthenticatedApiRoute(handler)
+      const request = new NextRequest('http://localhost')
+
+      const response = await route(request)
+      const body = await response.json()
+
+      expect(response.status).toBe(200)
+      expect(body.success).toBe(true)
+      expect(handler).toHaveBeenCalledWith(
+        request,
+        expect.objectContaining({ userId: '123', userEmail: 'test@example.com' }),
+        mockUser
+      )
+    })
+
+    it('returns the standard API error response when the session is missing', async () => {
+      vi.mocked(createClient).mockResolvedValue(mockSupabaseWith({ user: null }) as any)
+
+      const handler = vi.fn()
+      const route = createAuthenticatedApiRoute(handler)
+      const response = await route(new NextRequest('http://localhost'))
+      const body = await response.json()
+
+      expect(response.status).toBe(401)
+      expect(body.success).toBe(false)
+      expect(body.error.code).toBe('UNAUTHORIZED')
+      expect(body.error.message).toBe('Invalid or expired session')
       expect(handler).not.toHaveBeenCalled()
     })
   })

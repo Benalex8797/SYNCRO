@@ -22,24 +22,16 @@ import {
   ExecutorAssignedPayload,
   DuplicateRenewalRejectedPayload,
   LifecycleTimestampUpdatedPayload,
-  ContractEventValue
+  ContractEventValue,
+  CURRENT_CONTRACT_EVENT_SCHEMA_VERSION,
 } from '../types/contract-events';
 import { rpcEventResponseSchema } from '../schemas/contract-events';
 import { Subscription } from '../types/subscription';
 
 export type EventListenerStatus = 'running' | 'stopped' | 'disabled' | 'retrying' | 'failed';
 
-export interface EventListenerHealth {
-  status: EventListenerStatus;
-  isRunning: boolean;
-  lastSuccessfulPoll: string | null;
-  consecutiveErrors: number;
-  lastProcessedLedger: number | null;
-  reason?: string;
-  retryCount?: number;
-  nextRetryAt?: string | null;
-}
-
+const SUPPORTED_CONTRACT_EVENT_SCHEMA_VERSIONS = [CURRENT_CONTRACT_EVENT_SCHEMA_VERSION] as const;
+/** See job-alert-config.ts `event-listener` thresholds (default: 10 consecutive failures). */
 const ALERT_THRESHOLD = 10;
 const MAX_BACKOFF_MS = 300_000; // 5 minutes
 const MAX_RETRY_ATTEMPTS = 10;
@@ -295,10 +287,36 @@ export class EventListener {
     }
   }
 
+  private getEventSchemaVersion(event: ContractEvent): number {
+    const rawVersion = (event.value as any)?.schema_version;
+    return typeof rawVersion === 'number'
+      ? rawVersion
+      : CURRENT_CONTRACT_EVENT_SCHEMA_VERSION;
+  }
+
+  private isSupportedSchemaVersion(event: ContractEvent): boolean {
+    const version = this.getEventSchemaVersion(event);
+    const supported = SUPPORTED_CONTRACT_EVENT_SCHEMA_VERSIONS.includes(version as typeof SUPPORTED_CONTRACT_EVENT_SCHEMA_VERSIONS[number]);
+
+    if (!supported) {
+      logger.warn('Unsupported contract event schema version', {
+        eventType: event.type,
+        txHash: event.txHash,
+        ledger: event.ledger,
+        schemaVersion: version,
+        supportedVersions: SUPPORTED_CONTRACT_EVENT_SCHEMA_VERSIONS,
+      });
+    }
+
+    return supported;
+  }
+
   private async processEvents(events: ContractEvent[]): Promise<ProcessedEvent[]> {
     const processed: ProcessedEvent[] = [];
 
     for (const event of events) {
+      if (!this.isSupportedSchemaVersion(event)) continue;
+
       const handler = this.getEventHandler(event.type);
       if (handler) {
         const result = await handler(event);

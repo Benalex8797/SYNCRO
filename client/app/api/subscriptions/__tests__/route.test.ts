@@ -9,10 +9,14 @@ vi.mock("@/lib/supabase/server", () => ({
   createClient: vi.fn(),
 }))
 
-vi.mock("@/lib/api/auth", () => ({
-  requireAuth: vi.fn(),
-  createRequestContext: vi.fn().mockReturnValue({ requestId: "test-id" }),
-}))
+vi.mock("@/lib/api/auth", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/lib/api/auth")>()
+  return {
+    ...actual,
+    requireAuth: vi.fn(),
+    createRequestContext: vi.fn().mockReturnValue({ requestId: "test-id" }),
+  }
+})
 
 describe("Subscriptions API Route", () => {
   let supabase: any

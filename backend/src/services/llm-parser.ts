@@ -1,5 +1,6 @@
 import logger from '../config/logger';
 import { getMerchantCanonicalForm } from '../../utils/merchant-normalizer';
+import { ExternalServiceClient } from '../utils/external-service-client';
 
 export interface LLMParsedSubscription {
   name: string | null;
@@ -27,6 +28,7 @@ Rules:
 
 export class LLMParser {
   private apiKey: string | null;
+  private client = new ExternalServiceClient('llm');
 
   constructor() {
     this.apiKey = process.env.GEMINI_API_KEY ?? null;
@@ -55,18 +57,12 @@ export class LLMParser {
     };
 
     try {
-      const res = await fetch(`${GEMINI_API_URL}?key=${this.apiKey}`, {
+      const data = await this.client.request<any>(`${GEMINI_API_URL}?key=${this.apiKey}`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(body),
       });
 
-      if (!res.ok) {
-        logger.error('LLMParser: Gemini API error', { status: res.status });
-        return null;
-      }
-
-      const data: any = await res.json();
       const raw: string = data?.candidates?.[0]?.content?.parts?.[0]?.text ?? '';
       const parsed = JSON.parse(raw.trim()) as LLMParsedSubscription;
 

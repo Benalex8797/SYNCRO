@@ -493,3 +493,50 @@ describe('Indexer — production safety guards', () => {
     stopIndexer();
   });
 });
+
+// ─── resolveExplorerUrl / resolveAccountExplorerUrl / resolveExplorerBase ──────
+
+describe('explorer URL resolvers', () => {
+  beforeEach(() => jest.resetModules());
+
+  it('resolveExplorerBase defaults to testnet when STELLAR_NETWORK is unset', () => {
+    withEnv({ STELLAR_NETWORK: undefined, NODE_ENV: 'development' }, () => {
+      jest.resetModules();
+      const { resolveExplorerBase } = require('../../shared/blockchain-flags');
+      expect(resolveExplorerBase()).toBe('https://stellar.expert/explorer/testnet');
+    });
+  });
+
+  it('resolveExplorerBase returns mainnet URL for mainnet', () => {
+    withEnv({ STELLAR_NETWORK: 'mainnet' }, () => {
+      jest.resetModules();
+      const { resolveExplorerBase } = require('../../shared/blockchain-flags');
+      expect(resolveExplorerBase()).toBe('https://stellar.expert/explorer/public');
+    });
+  });
+
+  it('resolveExplorerBase returns testnet URL for testnet', () => {
+    expect(require('../../shared/blockchain-flags').resolveExplorerBase('testnet'))
+      .toBe('https://stellar.expert/explorer/testnet');
+  });
+
+  it('resolveExplorerUrl builds a full tx URL for testnet', () => {
+    expect(require('../../shared/blockchain-flags').resolveExplorerUrl('abc123', 'testnet'))
+      .toBe('https://stellar.expert/explorer/testnet/tx/abc123');
+  });
+
+  it('resolveExplorerUrl builds a full tx URL for mainnet', () => {
+    expect(require('../../shared/blockchain-flags').resolveExplorerUrl('abc123', 'mainnet'))
+      .toBe('https://stellar.expert/explorer/public/tx/abc123');
+  });
+
+  it('resolveAccountExplorerUrl builds account URL for futurenet', () => {
+    expect(require('../../shared/blockchain-flags').resolveAccountExplorerUrl('GA...', 'futurenet'))
+      .toBe('https://stellar.expert/explorer/futurenet/account/GA...');
+  });
+
+  it('resolveExplorerUrl falls back to public explorer for unknown network', () => {
+    expect(require('../../shared/blockchain-flags').resolveExplorerUrl('abc', 'unknown' as any))
+      .toBe('https://stellar.expert/explorer/public/tx/abc');
+  });
+});

@@ -26,7 +26,7 @@ export default async function NotificationSettingsPage() {
             href="/dashboard"
             className="inline-flex items-center text-sm text-gray-500 hover:text-gray-700 transition-colors"
           >
-            <svg className="w-4 h-4 mr-1" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <svg aria-hidden="true" className="w-4 h-4 mr-1" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" />
             </svg>
             Back to Dashboard
@@ -40,9 +40,10 @@ export default async function NotificationSettingsPage() {
       </div>
 
       {/* Navigation Tabs */}
-      <div className="flex space-x-1 mb-8 border-b">
+      <nav aria-label="Settings navigation" className="flex space-x-1 mb-8 border-b">
         <Link
           href="/settings/notifications"
+          aria-current="page"
           className="px-4 py-2 text-sm font-medium border-b-2 border-blue-500 text-blue-600"
         >
           Quiet Hours
@@ -59,7 +60,7 @@ export default async function NotificationSettingsPage() {
         >
           Privacy
         </Link>
-      </div>
+      </nav>
 
       {/* Reminder Settings */}
       <div className="mb-8">

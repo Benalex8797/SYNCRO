@@ -3,19 +3,22 @@ title: Webhooks
 description: "Receive real-time events when subscriptions change"
 ---
 
+> Note: The canonical API surface is generated from source. See the OpenAPI spec at
+> [/api-reference/openapi.json](./openapi.json). This page contains human-friendly examples and is marked as secondary.
+
 ## Overview
 
 SYNCRO sends HTTP `POST` requests to your registered webhook URLs when subscription events occur.
 
 ## Event Types
 
-| Event | Description |
-|-------|-------------|
-| `subscription.created` | A new subscription was added |
-| `subscription.renewed` | A subscription was successfully renewed |
-| `subscription.failed` | A renewal attempt failed |
-| `subscription.cancelled` | A subscription was cancelled |
-| `subscription.updated` | Subscription details changed |
+| Event                    | Description                             |
+| ------------------------ | --------------------------------------- |
+| `subscription.created`   | A new subscription was added            |
+| `subscription.renewed`   | A subscription was successfully renewed |
+| `subscription.failed`    | A renewal attempt failed                |
+| `subscription.cancelled` | A subscription was cancelled            |
+| `subscription.updated`   | Subscription details changed            |
 
 ## Webhook Payload
 
@@ -40,29 +43,31 @@ Every webhook request includes an `X-Syncro-Signature` header. Verify it to ensu
 <CodeGroup>
 
 ```typescript TypeScript
-import { createHmac } from 'crypto';
+import { createHmac } from "crypto";
 
-function verifyWebhook(payload: string, signature: string, secret: string): boolean {
-  const expected = createHmac('sha256', secret)
-    .update(payload)
-    .digest('hex');
+function verifyWebhook(
+  payload: string,
+  signature: string,
+  secret: string,
+): boolean {
+  const expected = createHmac("sha256", secret).update(payload).digest("hex");
   return signature === `sha256=${expected}`;
 }
 
 // In your webhook handler:
-app.post('/webhooks/syncro', (req, res) => {
+app.post("/webhooks/syncro", (req, res) => {
   const isValid = verifyWebhook(
     JSON.stringify(req.body),
-    req.headers['x-syncro-signature'] as string,
+    req.headers["x-syncro-signature"] as string,
     process.env.SYNCRO_WEBHOOK_SECRET!,
   );
-  if (!isValid) return res.status(401).send('Invalid signature');
+  if (!isValid) return res.status(401).send("Invalid signature");
 
   const { type, data } = req.body;
-  if (type === 'subscription.renewed') {
-    console.log('Renewed:', data.subscriptionId);
+  if (type === "subscription.renewed") {
+    console.log("Renewed:", data.subscriptionId);
   }
-  res.status(200).send('OK');
+  res.status(200).send("OK");
 });
 ```
 

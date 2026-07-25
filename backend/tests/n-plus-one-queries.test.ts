@@ -162,10 +162,10 @@ describe('N+1 query audit (issue #1095)', () => {
       jest.clearAllMocks();
       const many = await measureQueries(() => service.getSummaries(stub(MANY_USERS)));
 
-      // Before batching: 2 queries per user — 2 for 1 user and 100 for 50.
-      expect(one.metrics.total).toBe(2);
-      expect(many.metrics.total).toBe(2);
-      expect(many.metrics.byTable).toEqual({ subscriptions: 1, monthly_budgets: 1 });
+      // Before batching: 3 queries per user — 3 for 1 user and 150 for 50.
+      expect(one.metrics.total).toBe(3);
+      expect(many.metrics.total).toBe(3);
+      expect(many.metrics.byTable).toEqual({ subscriptions: 1, monthly_budgets: 1, suggestions: 1 });
     });
 
     it('computes the same summary as the single-user path', async () => {
@@ -229,10 +229,15 @@ describe('N+1 query audit (issue #1095)', () => {
       jest.clearAllMocks();
       const many = await measureQueries(() => service.checkBudgetThresholds(stub(MANY_USERS)));
 
-      // Before batching: 3 queries per alerting user — 3 for 1 and 150 for 50.
-      expect(one.metrics.total).toBe(4);
-      expect(many.metrics.total).toBe(4);
-      expect(many.metrics.byTable).toEqual({ subscriptions: 1, monthly_budgets: 1, notifications: 2 });
+      // Before batching: 4 queries per alerting user — 4 for 1 and 200 for 50.
+      expect(one.metrics.total).toBe(5);
+      expect(many.metrics.total).toBe(5);
+      expect(many.metrics.byTable).toEqual({
+        subscriptions: 1,
+        monthly_budgets: 1,
+        suggestions: 1,
+        notifications: 2,
+      });
     });
 
     it('skips users who were already notified this month', async () => {
@@ -270,8 +275,8 @@ describe('N+1 query audit (issue #1095)', () => {
 
       const { metrics } = await measureQueries(() => service.checkBudgetThresholds(['a']));
 
-      // Only the two summary queries — no dedup read and no insert.
-      expect(metrics.total).toBe(2);
+      // Only the three summary queries — no dedup read and no insert.
+      expect(metrics.total).toBe(3);
     });
   });
 

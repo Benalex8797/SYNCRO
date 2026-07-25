@@ -13,16 +13,11 @@ import {
   RenewalEventDto,
   RenewalHistoryResponseDto,
 } from './renewal-history.dto';
+import { resolveExplorerUrl } from '../../../shared/blockchain-flags';
 
 @Injectable()
 export class RenewalHistoryService {
   private readonly logger = new Logger(RenewalHistoryService.name);
-
-  // Stellar Expert base URL — mainnet vs testnet resolved via env
-  private readonly stellarExplorerBase =
-    process.env.STELLAR_NETWORK === 'testnet'
-      ? 'https://stellar.expert/explorer/testnet/tx'
-      : 'https://stellar.expert/explorer/public/tx';
 
   constructor(
     @InjectRepository(RenewalHistory)
@@ -170,7 +165,7 @@ export class RenewalHistoryService {
     if (row.paymentMethod) dto.paymentMethod = row.paymentMethod;
     if (row.transactionHash) {
       dto.transactionHash = row.transactionHash;
-      dto.explorerUrl = `${this.stellarExplorerBase}/${row.transactionHash}`;
+      dto.explorerUrl = resolveExplorerUrl(row.transactionHash);
     }
     if (row.blockchainLedger != null) dto.blockchainLedger = row.blockchainLedger;
     if (row.blockchainVerified != null) dto.blockchainVerified = row.blockchainVerified;

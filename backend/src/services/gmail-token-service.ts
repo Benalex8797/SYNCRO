@@ -13,12 +13,16 @@
 
 import { encrypt, decrypt } from '../utils/encryption';
 import { supabase } from '../config/database';
+import { ExternalServiceClient } from '../utils/external-service-client';
+import logger from '../config/logger';
 
 type TokenResponse = {
   access_token: string;
   refresh_token?: string;
   expires_in: number;
 };
+
+const gmailClient = new ExternalServiceClient('gmail');
 
 export class GmailTokenService {
   /**
@@ -41,7 +45,7 @@ export class GmailTokenService {
     const decryptedRefreshToken = decrypt(account.refresh_token);
 
     // 3. Request new tokens from Google OAuth2
-    const response = await fetch('https://oauth2.googleapis.com/token', {
+    const data = await gmailClient.request<TokenResponse>('https://oauth2.googleapis.com/token', {
       method: 'POST',
       headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
       body: new URLSearchParams({
@@ -49,14 +53,10 @@ export class GmailTokenService {
         client_secret: process.env.GOOGLE_CLIENT_SECRET || '',
         refresh_token: decryptedRefreshToken,
         grant_type: 'refresh_token',
-      }),
+      }).toString(),
     });
 
-    if (!response.ok) {
-      throw new Error(`Failed to refresh Gmail token: ${response.status}`);
-    }
-
-    const { access_token, refresh_token: newRefreshToken, expires_in } = await response.json() as TokenResponse;
+    const { access_token, refresh_token: newRefreshToken, expires_in } = data;
 
     // 4. Re-encrypt rotated credentials before database update
     const encryptedAccessToken = encrypt(access_token);
@@ -100,30 +100,23 @@ export class GmailTokenService {
           ? decrypt(account.access_token)
           : null;
 
-      if (!tokenToRevoke) {
-        throw new Error('No Gmail token available for revocation');
+      if (tokenToRevoke) {
+        await gmailClient.request(`https://oauth2.googleapis.com/revoke?token=${encodeURIComponent(tokenToRevoke)}`, {
+          method: 'POST',
+        }).catch(err => {
+          // If revocation fails, we still proceed with local purging
+          // to ensure account is disconnected from our side
+          logger.warn('Google token revocation failed', { error: err?.message });
+        });
       }
-      
-      await fetch(`https://oauth2.googleapis.com/revoke?token=${encodeURIComponent(tokenToRevoke)}`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-      });
-    } catch (err) {
-      // We log but continue scrubbing locally even if revocation fails (e.g. token already expired)
-      console.warn('Remote revocation failed, proceeding with local scrubbing:', err);
+    } catch (revokeError) {
+      logger.warn('Gmail disconnect revocation attempt failed', { error: revokeError });
     }
 
-    // 2. Immediate scrubbing of encrypted credentials from the database
-    const { error } = await supabase
+    // 2. Purge local credentials
+    await supabase
       .from('email_accounts')
-      .update({
-        access_token: null,
-        refresh_token: null,
-        is_connected: false,
-        updated_at: new Date().toISOString(),
-      })
+      .delete()
       .eq('id', account.id);
-
-    if (error) throw error;
   }
 }

@@ -19,6 +19,7 @@ import {
   StyleSheet,
   pdf,
 } from "@react-pdf/renderer"
+import { calculateMonthlySpend } from "@syncro/shared/subscription-math"
 import { formatCurrency } from "./currency-utils"
 import { formatDate, addDays } from "./timezone-utils"
 
@@ -333,7 +334,7 @@ export async function downloadSubscriptionPDF(
   subscriptions: ReportSubscription[],
 ): Promise<void> {
   const active = subscriptions.filter((s) => s.status === "active")
-  const monthlyTotal = active.reduce((sum, s) => sum + (s.price ?? 0), 0)
+  const monthlyTotal = calculateMonthlySpend(active)
 
   const summary: ReportSummary = {
     activeCount: active.length,

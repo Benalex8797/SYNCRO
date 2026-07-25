@@ -120,6 +120,24 @@ The following checks run automatically at startup and will **crash the process**
 
 ---
 
+## Blockchain event schema versioning
+
+Event payloads are versioned so producers and consumers can evolve safely.
+
+- Current contract event payload schema version: `1`
+- Event values may include an optional `schema_version` field inside the contract event `value` object.
+- Consumers validate the schema version before parsing or processing.
+- Events without `schema_version` are treated as legacy version `1` for backward compatibility.
+- Unsupported versions are ignored and logged, avoiding brittle failures when payload shapes change.
+
+### Versioning guidance
+
+- For non-breaking field additions, continue using version `1` and accept the new fields gracefully.
+- For breaking payload changes, increment `schema_version` and update backend/SDK consumers before deploying producers.
+- Document all breaking schema changes here and in the contract event producer implementation.
+
+---
+
 ## Using the Flags in Code
 
 ### Backend

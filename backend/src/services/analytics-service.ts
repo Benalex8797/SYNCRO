@@ -1,32 +1,57 @@
 import { supabase } from '../config/database';
 import logger from '../config/logger';
+import {
+  buildCategoryMonthlySpend,
+  buildPastMonthlySpendTrend,
+  calculateMonthlySpend,
+  countUpcomingRenewals,
+  getTopMonthlySpendSubscriptions,
+  normalizeToMonthlyAmount,
+  roundMoney,
+} from '@syncro/shared/subscription-math';
 import { AnalyticsSummary, MonthlySpend, CategorySpend, SubscriptionSpend, Budget } from '../types/analytics';
 import { Subscription } from '../types/reminder';
 import { groupBy, uniqueIds } from '../utils/db-query-metrics';
+import { queryCacheService } from './query-cache-service';
 
-/**
- * Subscriptions as read by this service. `cancelled_at` is only present on rows
- * that have been cancelled, so it is modelled as optional here rather than on
- * the shared `Subscription` type.
- */
-type AnalyticsSubscription = Subscription & { cancelled_at?: string | null };
+/** The suggestion columns this service reads, keyed back to their owner. */
+type SuggestionSaving = { user_id: string; savings_per_year: number | null };
 
 export class AnalyticsService {
   /**
    * Get analytics summary for a user
    */
   async getSummary(userId: string): Promise<AnalyticsSummary> {
+    const cached = await queryCacheService.get<AnalyticsSummary>(userId, 'analytics_summary', { type: 'summary' });
+    if (cached) {
+      return cached;
+    }
+
     const summaries = await this.getSummaries([userId]);
-    return summaries.get(userId) ?? this.composeSummary([], []);
+    const summary = summaries.get(userId) ?? this.composeSummary([], [], []);
+
+    await queryCacheService.set(
+      userId,
+      'analytics_summary',
+      { type: 'summary' },
+      summary,
+      queryCacheService.getDefaultAnalyticsTtl(),
+    );
+
+    return summary;
   }
 
   /**
    * Get analytics summaries for many users in a fixed number of queries
    * (issue #1095).
    *
-   * The per-user path costs two queries, so composing summaries for N users in
-   * a loop cost 2N. This issues one subscriptions query and one budgets query
-   * for the whole set and fans the rows out in memory.
+   * The per-user path costs three queries, so composing summaries for N users
+   * in a loop cost 3N. This issues one subscriptions, one budgets and one
+   * suggestions query for the whole set and fans the rows out in memory.
+   *
+   * The cache is deliberately left to `getSummary`: it is keyed per user, so
+   * reading it here would reintroduce the per-user round trip this exists to
+   * remove.
    */
   async getSummaries(userIds: readonly string[]): Promise<Map<string, AnalyticsSummary>> {
     const summaries = new Map<string, AnalyticsSummary>();
@@ -34,24 +59,35 @@ export class AnalyticsService {
     if (ids.length === 0) return summaries;
 
     try {
-      const [subsRes, budgetsRes] = await Promise.all([
+      const [subsRes, budgetsRes, suggestionsRes] = await Promise.all([
         supabase.from('subscriptions').select('*').in('user_id', ids).eq('status', 'active'),
         supabase.from('monthly_budgets').select('*').in('user_id', ids),
+        supabase
+          .from('suggestions')
+          .select('user_id, savings_per_year')
+          .in('user_id', ids)
+          .eq('dismissed_until', null),
       ]);
 
       if (subsRes.error) throw subsRes.error;
       if (budgetsRes.error) throw budgetsRes.error;
+      if (suggestionsRes.error) throw suggestionsRes.error;
 
-      const subsByUser = groupBy(
-        (subsRes.data || []) as AnalyticsSubscription[],
-        (sub) => sub.user_id,
-      );
+      const subsByUser = groupBy((subsRes.data || []) as Subscription[], (sub) => sub.user_id);
       const budgetsByUser = groupBy((budgetsRes.data || []) as Budget[], (b) => b.user_id);
+      const suggestionsByUser = groupBy(
+        (suggestionsRes.data || []) as SuggestionSaving[],
+        (s) => s.user_id,
+      );
 
       for (const userId of ids) {
         summaries.set(
           userId,
-          this.composeSummary(subsByUser.get(userId) ?? [], budgetsByUser.get(userId) ?? []),
+          this.composeSummary(
+            subsByUser.get(userId) ?? [],
+            budgetsByUser.get(userId) ?? [],
+            suggestionsByUser.get(userId) ?? [],
+          ),
         );
       }
 
@@ -63,16 +99,17 @@ export class AnalyticsService {
   }
 
   /**
-   * Turn one user's subscription and budget rows into a summary. Pure — all DB
-   * access happens in `getSummaries`.
+   * Turn one user's subscription, budget and suggestion rows into a summary.
+   * Pure — all DB access happens in `getSummaries`.
    */
   private composeSummary(
-    subscriptions: AnalyticsSubscription[],
+    subscriptions: Subscription[],
     budgets: Budget[],
+    suggestions: SuggestionSaving[],
   ): AnalyticsSummary {
-    const totalMonthlySpend = this.calculateTotalMonthlySpend(subscriptions);
-    const categoryBreakdown = this.calculateCategoryBreakdown(subscriptions, totalMonthlySpend);
-    const topSubscriptions = this.getTopSubscriptions(subscriptions);
+    const totalMonthlySpend = calculateMonthlySpend(subscriptions);
+    const categoryBreakdown = this.formatCategoryBreakdown(subscriptions);
+    const topSubscriptions = this.formatTopSubscriptions(subscriptions);
     const monthlyTrend = this.getMonthlyTrend(subscriptions);
 
     const overallBudget = budgets.find(b => b.category === null);
@@ -82,14 +119,10 @@ export class AnalyticsService {
       percentage: overallBudget ? (totalMonthlySpend / overallBudget.budget_limit) * 100 : 0
     };
 
-    // Upcoming renewals count (next 7 days)
-    const next7Days = new Date();
-    next7Days.setDate(next7Days.getDate() + 7);
-    const upcomingRenewalsCount = subscriptions.filter(sub => {
-      if (!sub.next_billing_date) return false;
-      const renewalDate = new Date(sub.next_billing_date);
-      return renewalDate <= next7Days && renewalDate >= new Date();
-    }).length;
+    const upcomingRenewalsCount = countUpcomingRenewals(subscriptions, 7);
+    const potentialSavingsMonthly = suggestions
+      .filter(s => s.savings_per_year)
+      .reduce((sum, s) => sum + (s.savings_per_year || 0) / 12, 0);
 
     return {
       total_monthly_spend: totalMonthlySpend,
@@ -98,76 +131,28 @@ export class AnalyticsService {
       monthly_trend: monthlyTrend,
       category_breakdown: categoryBreakdown,
       top_subscriptions: topSubscriptions,
-      budget_status: budgetStatus
+      budget_status: budgetStatus,
+      potential_savings_monthly: parseFloat(potentialSavingsMonthly.toFixed(2))
     };
   }
 
-  /**
-   * Calculate monthly normalized spend
-   */
-  private calculateTotalMonthlySpend(subscriptions: Subscription[]): number {
-    return subscriptions.reduce((total, sub) => {
-      return total + this.normalizeToMonthly(sub.price, sub.billing_cycle);
-    }, 0);
+  private formatCategoryBreakdown(subscriptions: Subscription[]): CategorySpend[] {
+    return buildCategoryMonthlySpend(subscriptions).map((category) => ({
+      category: category.category,
+      total_spend: category.totalMonthlySpend,
+      percentage: category.percentage,
+      count: category.count,
+    }));
   }
 
-  /**
-   * Normalize price to monthly
-   */
-  private normalizeToMonthly(price: number, cycle: string): number {
-    switch (cycle.toLowerCase()) {
-      case 'annual':
-      case 'yearly':
-        return price / 12;
-      case 'monthly':
-        return price;
-      case 'weekly':
-        return price * (365 / 7 / 12); // Average weeks in a month
-      case 'quarterly':
-        return price / 3;
-      case 'semiannual':
-        return price / 6;
-      default:
-        return price;
-    }
-  }
-
-  /**
-   * Calculate spend by category
-   */
-  private calculateCategoryBreakdown(subscriptions: Subscription[], totalSpend: number): CategorySpend[] {
-    const categories: Record<string, { total: number, count: number }> = {};
-    
-    subscriptions.forEach(sub => {
-      const category = sub.category || 'Other';
-      if (!categories[category]) {
-        categories[category] = { total: 0, count: 0 };
-      }
-      categories[category].total += this.normalizeToMonthly(sub.price, sub.billing_cycle);
-      categories[category].count += 1;
-    });
-
-    return Object.entries(categories).map(([name, data]) => ({
-      category: name,
-      total_spend: parseFloat(data.total.toFixed(2)),
-      percentage: totalSpend > 0 ? (data.total / totalSpend) * 100 : 0,
-      count: data.count
-    })).sort((a, b) => b.total_spend - a.total_spend);
-  }
-
-  /**
-   * Get top 5 expensive subscriptions (monthly normalized)
-   */
-  private getTopSubscriptions(subscriptions: Subscription[]): SubscriptionSpend[] {
-    return subscriptions.map(sub => ({
-      id: sub.id,
-      name: sub.name,
-      price: sub.price,
-      billing_cycle: sub.billing_cycle,
-      monthly_normalized_price: this.normalizeToMonthly(sub.price, sub.billing_cycle)
-    }))
-    .sort((a, b) => b.monthly_normalized_price - a.monthly_normalized_price)
-    .slice(0, 5);
+  private formatTopSubscriptions(subscriptions: Subscription[]): SubscriptionSpend[] {
+    return getTopMonthlySpendSubscriptions(subscriptions).map((subscription) => ({
+      id: subscription.id ? String(subscription.id) : '',
+      name: subscription.name ?? '',
+      price: subscription.price,
+      billing_cycle: subscription.billing_cycle,
+      monthly_normalized_price: subscription.monthlyNormalizedPrice,
+    }));
   }
 
   /**
@@ -179,31 +164,11 @@ export class AnalyticsService {
   private getMonthlyTrend(currentSubs: Subscription[]): MonthlySpend[] {
     // In a real app, this would query historical data or logs.
     // For now, we'll project the trend based on current subscriptions and created_at dates
-    const trend: MonthlySpend[] = [];
-    const now = new Date();
-    
-    for (let i = 5; i >= 0; i--) {
-      const targetDate = new Date(now.getFullYear(), now.getMonth() - i, 1);
-      const monthStr = targetDate.toISOString().substring(0, 7);
-      
-      // Filter subs that existed in this month
-      const subsAtTime = currentSubs.filter(sub => {
-        const createdAt = new Date(sub.created_at);
-        return createdAt <= new Date(targetDate.getFullYear(), targetDate.getMonth() + 1, 0);
-      });
-
-      const monthlyTotal = subsAtTime.reduce((total, sub) => {
-        return total + this.normalizeToMonthly(sub.price, sub.billing_cycle);
-      }, 0);
-
-      trend.push({
-        month: monthStr,
-        total_spend: parseFloat(monthlyTotal.toFixed(2)),
-        count: subsAtTime.length
-      });
-    }
-
-    return trend;
+    return buildPastMonthlySpendTrend(currentSubs).map((point) => ({
+      month: point.month,
+      total_spend: point.totalMonthlySpend,
+      count: point.count,
+    }));
   }
 
   /**
@@ -235,6 +200,8 @@ export class AnalyticsService {
       throw error;
     }
 
+    await queryCacheService.invalidateUserNamespace(userId, 'analytics_summary');
+
     return data;
   }
 
@@ -249,9 +216,9 @@ export class AnalyticsService {
    * Check budget thresholds for many users and raise any needed alerts
    * (issue #1095).
    *
-   * Costs four queries for the whole set — two for the summaries, one
+   * Costs five queries for the whole set — three for the summaries, one
    * de-duplication read and one batched notification insert — instead of the
-   * three-per-user the single-user path needed.
+   * four-per-user the single-user path needed.
    */
   async checkBudgetThresholds(userIds: readonly string[]): Promise<void> {
     const ids = uniqueIds(userIds);
@@ -330,10 +297,10 @@ export class AnalyticsService {
 
       const typedSubs = (subscriptions || []) as Subscription[];
       const monthlyTrend = this.getMonthlyTrend(typedSubs);
-      const categoryBreakdown = this.calculateCategoryBreakdown(typedSubs, this.calculateTotalMonthlySpend(typedSubs));
+      const categoryBreakdown = this.formatCategoryBreakdown(typedSubs);
 
       return {
-        current_month_spend: this.calculateTotalMonthlySpend(typedSubs),
+        current_month_spend: calculateMonthlySpend(typedSubs),
         monthly_trend: monthlyTrend,
         category_breakdown: categoryBreakdown,
         active_subscriptions: typedSubs.length
@@ -357,7 +324,7 @@ export class AnalyticsService {
 
       if (subError) throw subError;
 
-      const typedSubs = (subscriptions || []) as AnalyticsSubscription[];
+      const typedSubs = (subscriptions || []) as Subscription[];
       const forecast: MonthlySpend[] = [];
       const now = new Date();
 
@@ -376,17 +343,14 @@ export class AnalyticsService {
           
           // Check if subscription will be active in this month
           if (createdAt <= new Date(targetDate.getFullYear(), targetDate.getMonth() + 1, 0)) {
-            // Check if the subscription isn't cancelled or will be cancelled before this month
-            if (!sub.cancelled_at || new Date(sub.cancelled_at) > new Date(targetDate.getFullYear(), targetDate.getMonth(), 1)) {
-              monthlyTotal += this.normalizeToMonthly(sub.price, sub.billing_cycle);
-              count++;
-            }
+            monthlyTotal += normalizeToMonthlyAmount(sub.price, sub.billing_cycle);
+            count++;
           }
         }
 
         forecast.push({
           month: monthStr,
-          total_spend: parseFloat(monthlyTotal.toFixed(2)),
+          total_spend: roundMoney(monthlyTotal),
           count: count
         });
       }

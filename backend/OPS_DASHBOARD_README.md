@@ -15,7 +15,8 @@
 4. [Metric Baselines](#metric-baselines)
 5. [Drilling Into Failed Items](#drilling-into-failed-items)
 6. [On-Call Runbook](#on-call-runbook)
-7. [Architecture Notes](#architecture-notes)
+7. [Job Failure Alerting (Issue #100)](#job-failure-alerting-issue-100)
+8. [Architecture Notes](#architecture-notes)
 
 ---
 
@@ -401,6 +402,21 @@ curl -H "x-admin-api-key: $ADMIN_API_KEY" \
 3. If node is unreachable: engage infra team to restore Soroban RPC access.
 4. Blockchain sync failures are non-blocking (DB operations succeed independently).
 5. Retry stale syncs using `/api/subscriptions/:id/retry-sync` once connectivity is restored.
+
+---
+
+## Job Failure Alerting (Issue #100)
+
+Critical background jobs have defined alert thresholds and paging severity in `backend/src/config/job-alert-config.ts`. When thresholds breach, the `JobAlertService` emits Sentry alerts tagged with `alert_type:job_failure`.
+
+| Resource | Location |
+|----------|----------|
+| Threshold definitions | `backend/src/config/job-alert-config.ts` |
+| Alert evaluation service | `backend/src/services/job-alert-service.ts` |
+| Periodic monitor (5 min) | `backend/src/jobs/job-alert-monitor.ts` |
+| Operator runbook | [docs/JOB_FAILURE_RUNBOOK.md](../docs/JOB_FAILURE_RUNBOOK.md) |
+
+Disable the periodic monitor with `JOB_ALERT_MONITOR_ENABLED=false`. Override thresholds per job via `JOB_ALERT_<ENV_PREFIX>_*` env vars (documented in the config file).
 
 ---
 

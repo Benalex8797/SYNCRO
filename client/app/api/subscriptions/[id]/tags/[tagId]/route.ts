@@ -1,5 +1,5 @@
 import { type NextRequest } from "next/server"
-import { createApiRoute, createSuccessResponse, RateLimiters, ApiErrors, checkOwnership } from "@/lib/api/index"
+import { createAuthenticatedApiRoute, createSuccessResponse, RateLimiters, ApiErrors, checkOwnership } from "@/lib/api/index"
 import { HttpStatus } from "@/lib/api/types"
 import { removeTagFromSubscription } from "@/lib/supabase/tags"
 import { createClient } from "@/lib/supabase/server"
@@ -10,10 +10,8 @@ export async function DELETE(
 ) {
   const { id, tagId } = await params
 
-  return createApiRoute(
+  return createAuthenticatedApiRoute(
     async (_req, context, user) => {
-      if (!user) throw ApiErrors.unauthorized()
-
       const supabase = await createClient()
 
       // Verify subscription ownership
@@ -34,6 +32,6 @@ export async function DELETE(
 
       return createSuccessResponse({ removed: true }, HttpStatus.OK, context.requestId)
     },
-    { requireAuth: true, rateLimit: RateLimiters.tagMutation },
+    { rateLimit: RateLimiters.tagMutation },
   )(request)
 }

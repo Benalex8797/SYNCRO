@@ -1,3 +1,5 @@
+import { isSafeHttpUrl, maskApiKey, validateEmail } from "@syncro/shared/security"
+
 /**
  * Validates subscription creation input before sending to backend.
  * Runs BEFORE any Axios request to catch errors early.
@@ -293,8 +295,7 @@ export const validateSubscriptionData = (data: any) => {
 
   // Email validation
   if (data.email) {
-    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/
-    if (!emailRegex.test(data.email)) {
+    if (!validateEmail(data.email)) {
       errors.email = "Invalid email format"
     }
   }
@@ -345,8 +346,7 @@ export const validateAPIKey = (provider: string, apiKey: string) => {
 }
 
 export const maskAPIKey = (apiKey: string) => {
-  if (!apiKey || apiKey.length < 8) return "••••••••"
-  return `${apiKey.slice(0, 7)}...${apiKey.slice(-4)}`
+  return maskApiKey(apiKey)
 }
 
 // ─── Helper Functions ───────────────────────────────────────────────────────
@@ -357,16 +357,7 @@ export const maskAPIKey = (apiKey: string) => {
  * @returns true if valid, false otherwise
  */
 function isValidUrl(url: string): boolean {
-  if (typeof url !== 'string' || url.length > 2000) {
-    return false
-  }
-
-  try {
-    const parsed = new URL(url)
-    return parsed.protocol === 'http:' || parsed.protocol === 'https:'
-  } catch {
-    return false
-  }
+  return isSafeHttpUrl(url)
 }
 
 /**

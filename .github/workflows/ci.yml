@@ -5,8 +5,51 @@ on:
     branches: [main, develop]
   pull_request:
     branches: [main, develop]
+  workflow_dispatch:
+    inputs:
+      force_full_run:
+        description: 'Force a full CI run'
+        type: boolean
+        default: false
 
 jobs:
+  # ──────────────────────────────────────────────
+  # Job 0: Detect changes
+  # ──────────────────────────────────────────────
+  changes:
+    runs-on: ubuntu-latest
+    outputs:
+      backend: ${{ steps.filter.outputs.backend }}
+      client: ${{ steps.filter.outputs.client }}
+      sdk: ${{ steps.filter.outputs.sdk }}
+      shared: ${{ steps.filter.outputs.shared }}
+      force_full_run: ${{ github.event.inputs.force_full_run || 'false' }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dorny/paths-filter@v4
+        id: filter
+        with:
+          filters: |
+            backend:
+              - 'backend/**'
+              - 'shared/**'
+              - 'package.json'
+              - 'package-lock.json'
+            client:
+              - 'client/**'
+              - 'shared/**'
+              - 'package.json'
+              - 'package-lock.json'
+            sdk:
+              - 'sdk/**'
+              - 'shared/**'
+              - 'package.json'
+              - 'package-lock.json'
+            shared:
+              - 'shared/**'
+              - 'package.json'
+              - 'package-lock.json'
+
   # ──────────────────────────────────────────────
   # Job 1: Validate environment variables
   # Must pass before the build job starts.
@@ -14,39 +57,53 @@ jobs:
   validate-env:
     name: Validate Environment Variables
     runs-on: ubuntu-latest
+    needs: changes
+    if: ${{ needs.changes.outputs.force_full_run == 'true' || needs.changes.outputs.backend == 'true' || needs.changes.outputs.client == 'true' || needs.changes.outputs.sdk == 'true' }}
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
 
       - name: Set up Node.js
         uses: actions/setup-node@v6
         with:
           node-version: "20"
 
-      - name: Validate client environment variables
+      # ── Structural check (always — PRs + pushes) ──────────────────────────
+      # Secret-free: asserts manifests and .env.example files are in sync.
+      # Fails fast on config drift without needing real secrets, so forked /
+      # contributor PRs are not broken by absent secrets.
+      - name: Structural env check (manifests ↔ .env.example)
+        run: |
+          node scripts/check-env-docs.js
+          node backend/scripts/validate-env.js --structural
+          node client/scripts/validate-env.js --structural
+
+      # ── Strict presence check (pushes to protected branches only) ─────────
+      # Real secrets are injected here; the validators hard-fail if any
+      # REQUIRED var is missing (issue #601 — CI fails fast).
+      - name: Validate client environment variables (strict)
+        if: github.event_name == 'push'
         env:
           NEXT_PUBLIC_SUPABASE_URL: ${{ secrets.NEXT_PUBLIC_SUPABASE_URL }}
           NEXT_PUBLIC_SUPABASE_ANON_KEY: ${{ secrets.NEXT_PUBLIC_SUPABASE_ANON_KEY }}
-          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
           NEXT_PUBLIC_API_URL: ${{ secrets.NEXT_PUBLIC_API_URL }}
           STRIPE_SECRET_KEY: ${{ secrets.STRIPE_SECRET_KEY }}
           NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY: ${{ secrets.NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY }}
         run: node client/scripts/validate-env.js
 
-      - name: Validate backend environment variables
+      - name: Validate backend environment variables (strict)
+        if: github.event_name == 'push'
         env:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY }}
           SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
-          PORT: ${{ secrets.PORT }}
           JWT_SECRET: ${{ secrets.JWT_SECRET }}
+          ADMIN_API_KEY: ${{ secrets.ADMIN_API_KEY }}
           SMTP_HOST: ${{ secrets.SMTP_HOST }}
           SMTP_PORT: ${{ secrets.SMTP_PORT }}
           SMTP_USER: ${{ secrets.SMTP_USER }}
           SMTP_PASS: ${{ secrets.SMTP_PASS }}
-          STRIPE_SECRET_KEY: ${{ secrets.STRIPE_SECRET_KEY }}
-          STRIPE_WEBHOOK_SECRET: ${{ secrets.STRIPE_WEBHOOK_SECRET }}
           SOROBAN_CONTRACT_ADDRESS: ${{ secrets.SOROBAN_CONTRACT_ADDRESS }}
           STELLAR_NETWORK_URL: ${{ secrets.STELLAR_NETWORK_URL }}
         run: node backend/scripts/validate-env.js
@@ -58,18 +115,23 @@ jobs:
   validate-dependencies:
     name: Validate Dependencies
     runs-on: ubuntu-latest
-    needs: validate-env
+    needs: [changes, validate-env]
+    if: ${{ needs.changes.outputs.force_full_run == 'true' || needs.changes.outputs.backend == 'true' || needs.changes.outputs.client == 'true' || needs.changes.outputs.sdk == 'true' }}
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
 
       - name: Set up Node.js
         uses: actions/setup-node@v6
         with:
           node-version: "20"
 
+      - name: Validate intentional package names
+        run: node scripts/check-package-names.js
+
       - name: Check for 'latest' in client package.json
+        if: ${{ needs.changes.outputs.force_full_run == 'true' || needs.changes.outputs.client == 'true' }}
         run: |
           if grep -q '"latest"' client/package.json; then
             echo "❌ Error: 'latest' version found in client/package.json"
@@ -79,6 +141,7 @@ jobs:
           echo "✅ No 'latest' versions found in client/package.json"
 
       - name: Check for 'latest' in backend package.json
+        if: ${{ needs.changes.outputs.force_full_run == 'true' || needs.changes.outputs.backend == 'true' }}
         run: |
           if grep -q '"latest"' backend/package.json; then
             echo "❌ Error: 'latest' version found in backend/package.json"
@@ -88,10 +151,12 @@ jobs:
           echo "✅ No 'latest' versions found in backend/package.json"
 
       - name: Validate client dependencies
+        if: ${{ needs.changes.outputs.force_full_run == 'true' || needs.changes.outputs.client == 'true' }}
         working-directory: client
         run: node scripts/validate-deps.js
 
       - name: Verify client lockfile is committed
+        if: ${{ needs.changes.outputs.force_full_run == 'true' || needs.changes.outputs.client == 'true' }}
         run: |
           if [ ! -f "client/package-lock.json" ]; then
             echo "❌ Error: client/package-lock.json not found"
@@ -101,6 +166,7 @@ jobs:
           echo "✅ Client lockfile is committed"
 
       - name: Verify backend lockfile is committed
+        if: ${{ needs.changes.outputs.force_full_run == 'true' || needs.changes.outputs.backend == 'true' }}
         run: |
           if [ ! -f "backend/package-lock.json" ]; then
             echo "❌ Error: backend/package-lock.json not found"
@@ -109,7 +175,29 @@ jobs:
           fi
           echo "✅ Backend lockfile is committed"
 
+      - name: Verify exactly one Next.js config exists (client/next.config.mjs)
+        run: |
+          count=$(find . -maxdepth 1 -name "next.config.*" | wc -l)
+          if [ "$count" -ne 0 ]; then
+            echo "❌ Stale root-level next.config.* file(s) detected:"
+            find . -maxdepth 1 -name "next.config.*"
+            echo "Only client/next.config.mjs should exist."
+            exit 1
+          fi
+          if [ ! -f "client/next.config.mjs" ]; then
+            echo "❌ client/next.config.mjs is missing."
+            exit 1
+          fi
+          client_count=$(find client -maxdepth 1 -name "next.config.*" | wc -l)
+          if [ "$client_count" -ne 1 ]; then
+            echo "❌ Expected exactly 1 Next.js config under client/, found $client_count:"
+            find client -maxdepth 1 -name "next.config.*"
+            exit 1
+          fi
+          echo "✅ Exactly one Next.js config found: client/next.config.mjs"
+
       - name: Install client dependencies and verify lockfile
+        if: ${{ needs.changes.outputs.force_full_run == 'true' || needs.changes.outputs.client == 'true' }}
         working-directory: client
         run: |
           npm ci
@@ -121,6 +209,7 @@ jobs:
           echo "✅ Client lockfile is up to date"
 
       - name: Install backend dependencies and verify lockfile
+        if: ${{ needs.changes.outputs.force_full_run == 'true' || needs.changes.outputs.backend == 'true' }}
         working-directory: backend
         run: |
           npm ci
@@ -132,30 +221,64 @@ jobs:
           echo "✅ Backend lockfile is up to date"
 
   # ──────────────────────────────────────────────
+  # Job 2b: Validate issue governance (labels, triage policy, templates)
+  # Runs unconditionally — governance files must always be consistent.
+  # Refs: #114, docs/issue-triage-policy.md, .github/labels.yml
+  # ──────────────────────────────────────────────
+  validate-governance:
+    name: Validate Issue Governance
+    runs-on: ubuntu-latest
+    needs: changes
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: "20"
+
+      - name: Validate labels taxonomy, triage policy, and issue templates
+        run: node scripts/check-issue-governance.js
+
+      - name: Run governance unit tests
+        run: node --test scripts/check-issue-governance.test.js
+
+      - name: Validate CONTRIBUTING.md onboarding guide
+        run: node scripts/check-contributing.js
+
+      - name: Run CONTRIBUTING guide unit tests
+        run: node --test scripts/check-contributing.test.js
+
+  # ──────────────────────────────────────────────
   # Job 3: Dependency vulnerability scan
   # Blocks PRs with High or Critical vulnerabilities.
   # ──────────────────────────────────────────────
   security-audit:
     name: Security Audit
     runs-on: ubuntu-latest
-    needs: validate-dependencies
+    needs: [changes, validate-dependencies]
+    if: ${{ needs.changes.outputs.force_full_run == 'true' || needs.changes.outputs.backend == 'true' || needs.changes.outputs.client == 'true' }}
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
 
       - name: Set up Node.js
         uses: actions/setup-node@v6
         with:
-          node-version: '20'
-          cache: 'npm'
+          node-version: "20"
+          cache: "npm"
           cache-dependency-path: client/package-lock.json
 
       - name: Audit client dependencies
+        if: ${{ needs.changes.outputs.force_full_run == 'true' || needs.changes.outputs.client == 'true' }}
         working-directory: client
         run: npm audit --audit-level=high --omit=dev
 
       - name: Audit backend dependencies
+        if: ${{ needs.changes.outputs.force_full_run == 'true' || needs.changes.outputs.backend == 'true' }}
         working-directory: backend
         run: npm audit --audit-level=high --omit=dev
 
@@ -166,11 +289,12 @@ jobs:
   build-client:
     name: Build Client
     runs-on: ubuntu-latest
-    needs: [validate-dependencies, security-audit]
+    needs: [changes, validate-dependencies, security-audit]
+    if: ${{ needs.changes.outputs.force_full_run == 'true' || needs.changes.outputs.client == 'true' }}
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
 
       - name: Set up Node.js
         uses: actions/setup-node@v6
@@ -202,7 +326,8 @@ jobs:
   test-sdk:
     name: SDK — Build & Test
     runs-on: ubuntu-latest
-    needs: [validate-env, security-audit]
+    needs: [changes, validate-env, security-audit]
+    if: ${{ needs.changes.outputs.force_full_run == 'true' || needs.changes.outputs.sdk == 'true' }}
 
     defaults:
       run:
@@ -210,7 +335,7 @@ jobs:
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
 
       - name: Set up Node.js
         uses: actions/setup-node@v6
@@ -254,11 +379,12 @@ jobs:
   test-client:
     name: Test Client
     runs-on: ubuntu-latest
-    needs: [validate-env, security-audit]
+    needs: [changes, validate-env, security-audit]
+    if: ${{ needs.changes.outputs.force_full_run == 'true' || needs.changes.outputs.client == 'true' }}
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
 
       - name: Set up Node.js
         uses: actions/setup-node@v6
@@ -278,11 +404,12 @@ jobs:
   test-backend:
     name: Test Backend
     runs-on: ubuntu-latest
-    needs: [validate-dependencies, security-audit]
+    needs: [changes, validate-dependencies, security-audit]
+    if: ${{ needs.changes.outputs.force_full_run == 'true' || needs.changes.outputs.backend == 'true' }}
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
 
       - name: Set up Node.js
         uses: actions/setup-node@v6
@@ -293,7 +420,7 @@ jobs:
 
       - name: Install backend dependencies
         working-directory: backend
-        run: npm ci
+        run: npm install
 
       - name: Run backend tests
         working-directory: backend

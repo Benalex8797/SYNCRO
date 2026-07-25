@@ -8,6 +8,67 @@ import {
   type ChainVerificationResult,
 } from './audit-chain';
 
+// ─── Structured Security Event Types ─────────────────────────────────────────
+
+export type SecurityEventSeverity = 'low' | 'medium' | 'high' | 'critical';
+
+export type SecurityEventType =
+  | 'auth.jwt_invalid'
+  | 'auth.jwt_expired'
+  | 'auth.rate_limited'
+  | 'auth.unauthorized_access'
+  | 'mfa.recovery_code_failed'
+  | 'mfa.recovery_code_generated'
+  | 'mfa.disabled'
+  | 'mfa.failure_threshold_reached'
+  | 'webhook.auto_disabled'
+  | 'webhook.dead_letter_exhausted'
+  | 'webhook.anomalous_failure_rate'
+  | 'api_key.created'
+  | 'api_key.rotated'
+  | 'api_key.revoked'
+  | 'api_key.auth_failed'
+  | 'api_key.suspicious_usage'
+  | 'session.invalidated_all'
+  | 'session.revoked';
+
+export interface SecurityEventMeta {
+  severity: SecurityEventSeverity;
+  actorId?: string;
+  resourceType: string;
+  resourceId?: string;
+  ipAddress?: string;
+  userAgent?: string;
+  reason?: string;
+  details?: Record<string, unknown>;
+}
+
+/**
+ * Emit a structured security event.
+ * These events are written to the audit_logs table with a dedicated security
+ * resource type prefix and structured metadata for downstream detection and
+ * retention tooling.
+ */
+export async function emitSecurityEvent(
+  eventType: SecurityEventType,
+  meta: SecurityEventMeta,
+): Promise<void> {
+  await auditService.insertEntry({
+    userId: meta.actorId,
+    action: eventType,
+    resourceType: `security.${meta.resourceType}`,
+    resourceId: meta.resourceId,
+    metadata: {
+      severity: meta.severity,
+      correlationId: getRequestId(),
+      reason: meta.reason,
+      details: meta.details ?? null,
+    },
+    ipAddress: meta.ipAddress,
+    userAgent: meta.userAgent,
+  });
+}
+
 // ─── API Key lifecycle event types ───────────────────────────────────────────
 export type ApiKeyEvent = 'api_key.created' | 'api_key.rotated' | 'api_key.revoked' | 'api_key.auth_failed';
 

@@ -6,6 +6,7 @@ import { requireRole } from '../middleware/rbac';
 import { validate } from '../middleware/validate';
 import logger from '../config/logger';
 import { auditBatchSchema, auditQuerySchema, auditVerifyQuerySchema } from '../schemas/audit';
+import { PaginationError } from '../utils/pagination';
 
 const router: Router = Router();
 
@@ -98,11 +99,19 @@ router.get(
           hasMore: offset + limit < total,
         },
       });
-    } catch (error) {
+    } catch (error: any) {
+      if (error.name === 'PaginationError') {
+        res.status(400).json({
+          success: false,
+          error: error.message,
+          code: error.code,
+        });
+        return;
+      }
       logger.error('Error in GET /api/admin/audit:', error);
       res.status(500).json({
-        error: 'Internal server error',
-        message: error instanceof Error ? error.message : 'Unknown error',
+        success: false,
+        error: error instanceof Error ? error.message : 'Internal server error',
       });
     }
   },
