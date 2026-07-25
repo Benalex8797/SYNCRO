@@ -209,6 +209,10 @@ impl SubscriptionRenewalContract {
         max_spend: i128,
         expires_at: u32,
     ) {
+        // Guard: max_spend must be a positive monetary value.
+        if max_spend <= 0 {
+            panic!("max_spend must be positive");
+        }
         let sub_key = sub_id;
         let data: SubscriptionData = env
             .storage()
@@ -314,6 +318,10 @@ impl SubscriptionRenewalContract {
         cooldown_ledgers: u32,
         succeed: bool,
     ) -> bool {
+        // Guard: amount must be a positive monetary value.
+        if amount <= 0 {
+            panic!("amount must be positive");
+        }
         // Check global pause
         if Self::is_paused(env.clone()) {
             panic!("Protocol is paused");
@@ -369,7 +377,9 @@ impl SubscriptionRenewalContract {
             true
         } else {
             // Simulated failure - renewal failed, apply retry logic
-            data.failure_count += 1;
+            data.failure_count = data.failure_count
+                .checked_add(1)
+                .expect("failure_count overflow");
             data.last_attempt_ledger = current_ledger;
 
             // Emit renewal failure event
