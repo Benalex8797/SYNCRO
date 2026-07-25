@@ -303,15 +303,15 @@ This implementation plan establishes comprehensive test coverage for the client 
     - Implement dashboard for flaky test trends
     - _Requirements: 6.5, 6.6_
 
-- [ ] 13. Create integration test suite
-  - [ ] 13.1 Create subscription workflow integration tests
+- [x] 13. Create integration test suite
+  - [x] 13.1 Create subscription workflow integration tests
     - Create `client/__tests__/integration/subscription-workflows.test.tsx`
     - Test add subscription flow: form submission, list update, spending total update, notification
     - Test delete subscription flow: confirmation, removal, audit log, cleanup
     - Test edit subscription flow: form pre-population, update, list refresh
     - _Requirements: 8.1, 8.2, 8.6_
   
-  - [ ] 13.2 Create filtering and search integration tests
+  - [x] 13.2 Create filtering and search integration tests
     - Create `client/__tests__/integration/filtering-and-search.test.tsx`
     - Test filter by tag with UI updates
     - Test filter by category with UI updates
@@ -319,7 +319,7 @@ This implementation plan establishes comprehensive test coverage for the client 
     - Test combined filters and search
     - _Requirements: 8.3, 8.4, 8.6_
   
-  - [ ] 13.3 Create bulk operations integration tests
+  - [x] 13.3 Create bulk operations integration tests
     - Create `client/__tests__/integration/bulk-operations.test.tsx`
     - Test bulk selection state management
     - Test bulk delete with confirmation dialog
@@ -333,18 +333,18 @@ This implementation plan establishes comprehensive test coverage for the client 
     - Test notification dismissal and persistence
     - _Requirements: 8.6_
 
-- [ ] 14. Checkpoint - Verify integration tests
+- [x] 14. Checkpoint - Verify integration tests
   - Ensure all integration tests pass, ask the user if questions arise.
 
-- [ ] 15. Expand E2E test suite
-  - [ ] 15.1 Expand signup and onboarding E2E tests
+- [x] 15. Expand E2E test suite
+  - [x] 15.1 Expand signup and onboarding E2E tests
     - Update `client/e2e/auth.spec.ts` with complete signup flow
     - Test account creation with email and password
     - Test email verification flow
     - Test onboarding tour completion
     - _Requirements: 9.1, 9.6_
   
-  - [ ] 15.2 Create email connection E2E tests
+  - [x] 15.2 Create email connection E2E tests
     - Create `client/e2e/email-connection.spec.ts`
     - Test Gmail OAuth flow with popup handling
     - Test token storage and persistence
@@ -352,7 +352,7 @@ This implementation plan establishes comprehensive test coverage for the client 
     - Test connection status display
     - _Requirements: 9.2, 9.6_
   
-  - [ ] 15.3 Create payment flow E2E tests
+  - [x] 15.3 Create payment flow E2E tests
     - Create `client/e2e/payment-flows.spec.ts`
     - Test plan selection and upgrade flow
     - Test Stripe payment form in iframe
@@ -360,7 +360,7 @@ This implementation plan establishes comprehensive test coverage for the client 
     - Test feature unlocking after payment
     - _Requirements: 9.3, 9.6_
   
-  - [ ] 15.4 Create MFA E2E tests
+  - [x] 15.4 Create MFA E2E tests
     - Create `client/e2e/mfa-flows.spec.ts`
     - Test MFA setup flow with QR code and backup codes
     - Test TOTP token verification
@@ -368,14 +368,14 @@ This implementation plan establishes comprehensive test coverage for the client 
     - Test backup code usage
     - _Requirements: 9.4, 9.6_
   
-  - [ ] 15.5 Create data export E2E tests
+  - [x] 15.5 Create data export E2E tests
     - Create `client/e2e/data-export.spec.ts`
     - Test CSV file download
     - Test file content and format
     - Test data completeness
     - _Requirements: 9.5, 9.6_
   
-  - [ ] 15.6 Expand subscription CRUD E2E tests
+  - [x] 15.6 Expand subscription CRUD E2E tests
     - Update `client/e2e/subscription-flows.spec.ts` with additional scenarios
     - Test subscription creation with all fields
     - Test subscription editing with validation
