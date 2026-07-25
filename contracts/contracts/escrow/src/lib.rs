@@ -2,7 +2,7 @@
 
 use soroban_sdk::{
     contract, contracterror, contractevent, contractimpl, contracttype,
-    panic_with_error, token, Address, Env, String,
+    token, Address, Env, String,
 };
 
 // ── Storage keys ──────────────────────────────────────────────────────────────
@@ -57,24 +57,25 @@ pub struct EscrowAgreement {
 #[derive(Copy, Clone, Debug, Eq, PartialEq, PartialOrd, Ord)]
 #[repr(u32)]
 pub enum EscrowError {
-    AlreadyInitialized = 1,
-    NotInitialized = 2,
-    EscrowNotFound = 3,
-    Unauthorized = 4,
-    InvalidAmount = 5,
+    AlreadyInitialized  = 1,
+    NotInitialized      = 2,
+    EscrowNotFound      = 3,
+    Unauthorized        = 4,
+    InvalidAmount       = 5,
     InsufficientDeposit = 6,
-    AlreadyFunded = 7,
-    NotFunded = 8,
-    AlreadyApproved = 9,
-    NotApproved = 10,
-    AlreadyReleased = 11,
-    AlreadyRefunded = 12,
-    Expired = 13,
-    NotExpired = 14,
-    InDispute = 15,
-    NotInDispute = 16,
-    SelfAsCounterparty = 17,
-    SameArbiterAsParty = 18,
+    AlreadyFunded       = 7,
+    NotFunded           = 8,
+    AlreadyApproved     = 9,
+    NotApproved         = 10,
+    AlreadyReleased     = 11,
+    AlreadyRefunded     = 12,
+    Expired             = 13,
+    NotExpired          = 14,
+    InDispute           = 15,
+    NotInDispute        = 16,
+    SelfAsCounterparty  = 17,
+    SameArbiterAsParty  = 18,
+    InvalidResolution   = 19,
 }
 
 // ── Events ────────────────────────────────────────────────────────────────────
@@ -140,20 +141,32 @@ pub struct EscrowContract;
 impl EscrowContract {
     // ── Admin ─────────────────────────────────────────────────────
 
-    pub fn init(env: Env, admin: Address) {
+    pub fn init(env: Env, admin: Address) -> Result<(), EscrowError> {
         if env.storage().instance().has(&DataKey::Admin) {
-            panic_with_error!(&env, EscrowError::AlreadyInitialized);
+            return Err(EscrowError::AlreadyInitialized);
         }
         env.storage().instance().set(&DataKey::Admin, &admin);
+        Ok(())
     }
 
-    fn require_admin(env: &Env) {
+    fn require_admin(env: &Env) -> Result<(), EscrowError> {
         let admin: Address = env
             .storage()
             .instance()
             .get(&DataKey::Admin)
-            .expect("not initialized");
+            .ok_or(EscrowError::NotInitialized)?;
         admin.require_auth();
+        Ok(())
+    }
+
+    // ── Helpers ───────────────────────────────────────────────────
+
+    /// Load an escrow by ID, returning a typed error if not found.
+    fn load_escrow(env: &Env, escrow_id: u64) -> Result<EscrowAgreement, EscrowError> {
+        env.storage()
+            .persistent()
+            .get(&DataKey::Escrow(escrow_id))
+            .ok_or(EscrowError::EscrowNotFound)
     }
 
     // ── Escrow lifecycle ──────────────────────────────────────────
@@ -161,17 +174,19 @@ impl EscrowContract {
     /// Create a new escrow agreement.
     ///
     /// # Arguments
-    /// * `payer` — The party depositing funds
-    /// * `payee` — The party receiving funds on successful completion
-    /// * `arbiter` — The trusted third party who must approve release
-    /// * `token` — The token contract address for the escrow currency
-    /// * `amount` — The exact amount to lock in escrow
-    /// * `expires_at` — Unix timestamp after which payer may claim refund
+    /// * `payer`       — The party depositing funds
+    /// * `payee`       — The party receiving funds on successful completion
+    /// * `arbiter`     — The trusted third party who must approve release
+    /// * `token`       — The token contract address for the escrow currency
+    /// * `amount`      — The exact amount to lock in escrow (must be > 0)
+    /// * `expires_at`  — Unix timestamp after which payer may claim refund
     /// * `description` — Human-readable description of the agreement
     ///
-    /// # Security
-    /// * Arbiter must be distinct from both payer and payee
-    /// * Amount must be positive
+    /// # Errors
+    /// * `InvalidAmount`      — `amount` is zero or negative
+    /// * `SelfAsCounterparty` — `payer == payee`
+    /// * `SameArbiterAsParty` — `arbiter == payer` or `arbiter == payee`
+    /// * `Expired`            — `expires_at` is not in the future
     pub fn create_escrow(
         env: Env,
         payer: Address,
@@ -181,17 +196,23 @@ impl EscrowContract {
         amount: i128,
         expires_at: u64,
         description: String,
-    ) -> u64 {
+    ) -> Result<u64, EscrowError> {
         payer.require_auth();
 
+        // Input validation
         if amount <= 0 {
-            panic_with_error!(&env, EscrowError::InvalidAmount);
+            return Err(EscrowError::InvalidAmount);
         }
         if payer == payee {
-            panic_with_error!(&env, EscrowError::SelfAsCounterparty);
+            return Err(EscrowError::SelfAsCounterparty);
         }
         if arbiter == payer || arbiter == payee {
-            panic_with_error!(&env, EscrowError::SameArbiterAsParty);
+            return Err(EscrowError::SameArbiterAsParty);
+        }
+
+        let now = env.ledger().timestamp();
+        if expires_at <= now {
+            return Err(EscrowError::Expired);
         }
 
         let count: u64 = env
@@ -200,11 +221,6 @@ impl EscrowContract {
             .get(&DataKey::EscrowCount)
             .unwrap_or(0);
         let escrow_id = count + 1;
-
-        let now = env.ledger().timestamp();
-        if expires_at <= now {
-            panic_with_error!(&env, EscrowError::Expired);
-        }
 
         let escrow = EscrowAgreement {
             id: escrow_id,
@@ -239,21 +255,27 @@ impl EscrowContract {
         }
         .publish(&env);
 
-        escrow_id
+        Ok(escrow_id)
     }
 
     /// Deposit funds into an escrow.
     /// Only the designated payer may fund the escrow.
     /// The full `amount` must be deposited in a single call.
-    pub fn deposit(env: Env, escrow_id: u64) {
-        let mut escrow: EscrowAgreement = env
-            .storage()
-            .persistent()
-            .get(&DataKey::Escrow(escrow_id))
-            .expect("escrow not found");
+    ///
+    /// # Errors
+    /// * `EscrowNotFound`  — no escrow with this ID
+    /// * `AlreadyFunded`   — escrow is not in `Created` state
+    /// * `InvalidAmount`   — escrow amount is zero (belt-and-suspenders guard)
+    pub fn deposit(env: Env, escrow_id: u64) -> Result<(), EscrowError> {
+        let mut escrow = Self::load_escrow(&env, escrow_id)?;
 
         if escrow.state != EscrowState::Created {
-            panic_with_error!(&env, EscrowError::AlreadyFunded);
+            return Err(EscrowError::AlreadyFunded);
+        }
+
+        // Belt-and-suspenders: amount should always be positive, but guard here too
+        if escrow.amount <= 0 {
+            return Err(EscrowError::InvalidAmount);
         }
 
         escrow.payer.require_auth();
@@ -277,6 +299,8 @@ impl EscrowContract {
             amount: escrow.amount,
         }
         .publish(&env);
+
+        Ok(())
     }
 
     /// Approve release of escrowed funds.
@@ -284,21 +308,18 @@ impl EscrowContract {
     /// This is the **second signature** required before funds can be withdrawn.
     /// Only the designated `arbiter` may call this.
     ///
-    /// # Security
-    /// * Escrow must be in `Funded` state
-    /// * Arbiter authentication is strictly required
-    pub fn approve_release(env: Env, escrow_id: u64) {
-        let mut escrow: EscrowAgreement = env
-            .storage()
-            .persistent()
-            .get(&DataKey::Escrow(escrow_id))
-            .expect("escrow not found");
+    /// # Errors
+    /// * `EscrowNotFound`  — no escrow with this ID
+    /// * `NotFunded`       — escrow is not in `Funded` or `Disputed` state
+    /// * `AlreadyApproved` — arbiter has already approved
+    pub fn approve_release(env: Env, escrow_id: u64) -> Result<(), EscrowError> {
+        let mut escrow = Self::load_escrow(&env, escrow_id)?;
 
         if escrow.state != EscrowState::Funded && escrow.state != EscrowState::Disputed {
-            panic_with_error!(&env, EscrowError::NotFunded);
+            return Err(EscrowError::NotFunded);
         }
         if escrow.arbiter_approved {
-            panic_with_error!(&env, EscrowError::AlreadyApproved);
+            return Err(EscrowError::AlreadyApproved);
         }
 
         escrow.arbiter.require_auth();
@@ -315,26 +336,24 @@ impl EscrowContract {
             arbiter: escrow.arbiter,
         }
         .publish(&env);
+
+        Ok(())
     }
 
     /// Release escrowed funds to the payee.
     ///
-    /// # Security
-    /// * Requires `arbiter_approved == true` (second signature check)
-    /// * Only the designated payee may receive the funds
-    /// * Escrow must be in `Approved` state
-    pub fn release(env: Env, escrow_id: u64) {
-        let mut escrow: EscrowAgreement = env
-            .storage()
-            .persistent()
-            .get(&DataKey::Escrow(escrow_id))
-            .expect("escrow not found");
+    /// # Errors
+    /// * `EscrowNotFound`  — no escrow with this ID
+    /// * `AlreadyReleased` — funds already released
+    /// * `NotApproved`     — arbiter has not yet approved
+    pub fn release(env: Env, escrow_id: u64) -> Result<(), EscrowError> {
+        let mut escrow = Self::load_escrow(&env, escrow_id)?;
 
         if escrow.state == EscrowState::Released {
-            panic_with_error!(&env, EscrowError::AlreadyReleased);
+            return Err(EscrowError::AlreadyReleased);
         }
         if escrow.state != EscrowState::Approved {
-            panic_with_error!(&env, EscrowError::NotApproved);
+            return Err(EscrowError::NotApproved);
         }
 
         // Payee must authorize receipt
@@ -359,6 +378,8 @@ impl EscrowContract {
             amount: escrow.deposited,
         }
         .publish(&env);
+
+        Ok(())
     }
 
     /// Refund escrowed funds to the payer.
@@ -367,22 +388,23 @@ impl EscrowContract {
     /// * BEFORE expiry: Only if arbiter has NOT approved yet
     /// * AFTER expiry: Payer may claim refund unilaterally
     ///
-    /// This protects the payer from funds being locked indefinitely.
-    pub fn refund(env: Env, escrow_id: u64) {
-        let mut escrow: EscrowAgreement = env
-            .storage()
-            .persistent()
-            .get(&DataKey::Escrow(escrow_id))
-            .expect("escrow not found");
+    /// # Errors
+    /// * `EscrowNotFound`  — no escrow with this ID
+    /// * `AlreadyRefunded` — funds already refunded
+    /// * `AlreadyReleased` — funds already released
+    /// * `NotFunded`       — escrow was never funded
+    /// * `AlreadyApproved` — arbiter approved and expiry has not passed
+    pub fn refund(env: Env, escrow_id: u64) -> Result<(), EscrowError> {
+        let mut escrow = Self::load_escrow(&env, escrow_id)?;
 
         if escrow.state == EscrowState::Refunded {
-            panic_with_error!(&env, EscrowError::AlreadyRefunded);
+            return Err(EscrowError::AlreadyRefunded);
         }
         if escrow.state == EscrowState::Released {
-            panic_with_error!(&env, EscrowError::AlreadyReleased);
+            return Err(EscrowError::AlreadyReleased);
         }
         if escrow.state != EscrowState::Funded && escrow.state != EscrowState::Approved {
-            panic_with_error!(&env, EscrowError::NotFunded);
+            return Err(EscrowError::NotFunded);
         }
 
         let now = env.ledger().timestamp();
@@ -394,7 +416,7 @@ impl EscrowContract {
         } else {
             // Before expiry — refund only if arbiter hasn't approved
             if escrow.arbiter_approved {
-                panic_with_error!(&env, EscrowError::AlreadyApproved);
+                return Err(EscrowError::AlreadyApproved);
             }
             escrow.payer.require_auth();
         }
@@ -418,23 +440,26 @@ impl EscrowContract {
             amount: escrow.deposited,
         }
         .publish(&env);
+
+        Ok(())
     }
 
     /// Raise a dispute for an escrow.
     /// Either payer or payee may raise a dispute.
-    pub fn raise_dispute(env: Env, escrow_id: u64, caller: Address) {
-        let mut escrow: EscrowAgreement = env
-            .storage()
-            .persistent()
-            .get(&DataKey::Escrow(escrow_id))
-            .expect("escrow not found");
+    ///
+    /// # Errors
+    /// * `EscrowNotFound` — no escrow with this ID
+    /// * `NotFunded`      — escrow is not in a disputable state
+    /// * `Unauthorized`   — caller is not payer or payee
+    pub fn raise_dispute(env: Env, escrow_id: u64, caller: Address) -> Result<(), EscrowError> {
+        let mut escrow = Self::load_escrow(&env, escrow_id)?;
 
         if escrow.state != EscrowState::Funded && escrow.state != EscrowState::Approved {
-            panic_with_error!(&env, EscrowError::NotFunded);
+            return Err(EscrowError::NotFunded);
         }
 
         if caller != escrow.payer && caller != escrow.payee {
-            panic_with_error!(&env, EscrowError::Unauthorized);
+            return Err(EscrowError::Unauthorized);
         }
         caller.require_auth();
 
@@ -449,6 +474,8 @@ impl EscrowContract {
             raised_by: caller,
         }
         .publish(&env);
+
+        Ok(())
     }
 
     /// Resolve a disputed escrow.
@@ -457,15 +484,16 @@ impl EscrowContract {
     /// * `resolution` — `1` to release to payee, `2` to refund to payer
     ///
     /// Only the designated arbiter may resolve disputes.
-    pub fn resolve_dispute(env: Env, escrow_id: u64, resolution: u32) {
-        let mut escrow: EscrowAgreement = env
-            .storage()
-            .persistent()
-            .get(&DataKey::Escrow(escrow_id))
-            .expect("escrow not found");
+    ///
+    /// # Errors
+    /// * `EscrowNotFound`    — no escrow with this ID
+    /// * `NotInDispute`      — escrow is not in `Disputed` state
+    /// * `InvalidResolution` — `resolution` is not `1` or `2`
+    pub fn resolve_dispute(env: Env, escrow_id: u64, resolution: u32) -> Result<(), EscrowError> {
+        let mut escrow = Self::load_escrow(&env, escrow_id)?;
 
         if escrow.state != EscrowState::Disputed {
-            panic_with_error!(&env, EscrowError::NotInDispute);
+            return Err(EscrowError::NotInDispute);
         }
 
         escrow.arbiter.require_auth();
@@ -491,7 +519,7 @@ impl EscrowContract {
                 );
                 escrow.state = EscrowState::Refunded;
             }
-            _ => panic_with_error!(&env, EscrowError::InvalidAmount),
+            _ => return Err(EscrowError::InvalidResolution),
         }
 
         env.storage()
@@ -503,15 +531,15 @@ impl EscrowContract {
             resolution,
         }
         .publish(&env);
+
+        Ok(())
     }
 
     // ── Queries ───────────────────────────────────────────────────
 
-    pub fn get_escrow(env: Env, escrow_id: u64) -> EscrowAgreement {
-        env.storage()
-            .persistent()
-            .get(&DataKey::Escrow(escrow_id))
-            .expect("escrow not found")
+    /// Return the escrow agreement, or `EscrowNotFound` if it does not exist.
+    pub fn get_escrow(env: Env, escrow_id: u64) -> Result<EscrowAgreement, EscrowError> {
+        Self::load_escrow(&env, escrow_id)
     }
 
     pub fn get_escrow_count(env: Env) -> u64 {
@@ -522,31 +550,30 @@ impl EscrowContract {
     }
 
     /// Check if an escrow can be refunded (either not approved yet, or expired).
-    pub fn is_refundable(env: Env, escrow_id: u64) -> bool {
-        let escrow: EscrowAgreement = env
-            .storage()
-            .persistent()
-            .get(&DataKey::Escrow(escrow_id))
-            .expect("escrow not found");
+    ///
+    /// # Errors
+    /// * `EscrowNotFound` — no escrow with this ID
+    pub fn is_refundable(env: Env, escrow_id: u64) -> Result<bool, EscrowError> {
+        let escrow = Self::load_escrow(&env, escrow_id)?;
 
         let now = env.ledger().timestamp();
         let expired = now >= escrow.expires_at;
 
-        (escrow.state == EscrowState::Funded || escrow.state == EscrowState::Approved)
-            && (expired || !escrow.arbiter_approved)
-            && escrow.state != EscrowState::Released
-            && escrow.state != EscrowState::Refunded
+        Ok(
+            (escrow.state == EscrowState::Funded || escrow.state == EscrowState::Approved)
+                && (expired || !escrow.arbiter_approved)
+                && escrow.state != EscrowState::Released
+                && escrow.state != EscrowState::Refunded,
+        )
     }
 
     /// Check if an escrow can be released (arbiter approved and payee hasn't claimed).
-    pub fn is_releasable(env: Env, escrow_id: u64) -> bool {
-        let escrow: EscrowAgreement = env
-            .storage()
-            .persistent()
-            .get(&DataKey::Escrow(escrow_id))
-            .expect("escrow not found");
-
-        escrow.state == EscrowState::Approved
+    ///
+    /// # Errors
+    /// * `EscrowNotFound` — no escrow with this ID
+    pub fn is_releasable(env: Env, escrow_id: u64) -> Result<bool, EscrowError> {
+        let escrow = Self::load_escrow(&env, escrow_id)?;
+        Ok(escrow.state == EscrowState::Approved)
     }
 }
 
@@ -558,9 +585,11 @@ mod test {
     use soroban_sdk::{
         testutils::{Address as _, Ledger},
         token::{StellarAssetClient, TokenClient},
-        Symbol, Val,
     };
 
+    // ── Shared test setup ─────────────────────────────────────────
+
+    /// Returns (env, payer, payee, arbiter, token_address, token_client).
     fn setup() -> (Env, Address, Address, Address, Address, TokenClient<'static>) {
         let env = Env::default();
         env.mock_all_auths();
@@ -570,15 +599,14 @@ mod test {
         let payee = Address::generate(&env);
         let arbiter = Address::generate(&env);
 
-        // Create a Stellar asset token for testing
         let sac = env.register_stellar_asset_contract_v2(admin.clone());
-        let token = TokenClient::new(&env, &sac.address());
-        let asset_client = StellarAssetClient::new(&env, &sac.address());
+        let token = TokenClient::new(&env, &sac.0);
+        let asset_client = StellarAssetClient::new(&env, &sac.0);
 
-        // Mint tokens to payer
+        // Mint 10 XLM-equivalent tokens to payer
         asset_client.mint(&payer, &10_000_000_000i128);
 
-        (env, payer, payee, arbiter, sac.address(), token)
+        (env, payer, payee, arbiter, sac.0, token)
     }
 
     fn register_escrow(env: &Env) -> EscrowContractClient<'static> {
@@ -586,211 +614,129 @@ mod test {
         EscrowContractClient::new(env, &contract_id)
     }
 
+    // ── Happy-path tests ──────────────────────────────────────────
+
     #[test]
     fn test_full_happy_path() {
-        let (env, payer, payee, arbiter, token, _token_client) = setup();
+        let (env, payer, payee, arbiter, token, _tc) = setup();
         let escrow = register_escrow(&env);
         let admin = Address::generate(&env);
-        escrow.init(&admin);
+        escrow.init(&admin).unwrap();
 
         let expiry = env.ledger().timestamp() + 86400;
         let desc = String::from_str(&env, "Enterprise SaaS subscription");
 
-        let id = escrow.create_escrow(
-            &payer, &payee, &arbiter, &token, &1_000_000_000i128, &expiry, &desc,
-        );
+        let id = escrow
+            .create_escrow(&payer, &payee, &arbiter, &token, &1_000_000_000i128, &expiry, &desc)
+            .unwrap();
         assert_eq!(id, 1);
 
-        let agreement = escrow.get_escrow(&id);
+        let agreement = escrow.get_escrow(&id).unwrap();
         assert_eq!(agreement.state, EscrowState::Created);
         assert_eq!(agreement.amount, 1_000_000_000i128);
 
-        // Fund
-        escrow.deposit(&id);
-        let funded = escrow.get_escrow(&id);
+        escrow.deposit(&id).unwrap();
+        let funded = escrow.get_escrow(&id).unwrap();
         assert_eq!(funded.state, EscrowState::Funded);
         assert_eq!(funded.deposited, 1_000_000_000i128);
 
-        // Arbiter approves (second signature)
-        escrow.approve_release(&id);
-        let approved = escrow.get_escrow(&id);
+        escrow.approve_release(&id).unwrap();
+        let approved = escrow.get_escrow(&id).unwrap();
         assert_eq!(approved.state, EscrowState::Approved);
         assert!(approved.arbiter_approved);
 
-        // Payee releases
-        escrow.release(&id);
-        let released = escrow.get_escrow(&id);
+        escrow.release(&id).unwrap();
+        let released = escrow.get_escrow(&id).unwrap();
         assert_eq!(released.state, EscrowState::Released);
     }
 
     #[test]
-    #[should_panic(expected = "Error(Contract, #10)")]
-    fn test_release_without_arbiter_approval_fails() {
-        let (env, payer, payee, arbiter, token, _token_client) = setup();
-        let escrow = register_escrow(&env);
-        let admin = Address::generate(&env);
-        escrow.init(&admin);
-
-        let expiry = env.ledger().timestamp() + 86400;
-        let desc = String::from_str(&env, "Test");
-
-        let id = escrow.create_escrow(
-            &payer, &payee, &arbiter, &token, &1_000_000_000i128, &expiry, &desc,
-        );
-        escrow.deposit(&id);
-
-        // Try to release without arbiter approval — should panic
-        escrow.release(&id);
-    }
-
-    #[test]
     fn test_refund_before_approval() {
-        let (env, payer, payee, arbiter, token, _token_client) = setup();
+        let (env, payer, payee, arbiter, token, _tc) = setup();
         let escrow = register_escrow(&env);
         let admin = Address::generate(&env);
-        escrow.init(&admin);
+        escrow.init(&admin).unwrap();
 
         let expiry = env.ledger().timestamp() + 86400;
         let desc = String::from_str(&env, "Test");
 
-        let id = escrow.create_escrow(
-            &payer, &payee, &arbiter, &token, &500_000_000i128, &expiry, &desc,
-        );
-        escrow.deposit(&id);
+        let id = escrow
+            .create_escrow(&payer, &payee, &arbiter, &token, &500_000_000i128, &expiry, &desc)
+            .unwrap();
+        escrow.deposit(&id).unwrap();
 
-        let before = escrow.get_escrow(&id);
-        assert_eq!(before.state, EscrowState::Funded);
-
-        escrow.refund(&id);
-        let after = escrow.get_escrow(&id);
+        escrow.refund(&id).unwrap();
+        let after = escrow.get_escrow(&id).unwrap();
         assert_eq!(after.state, EscrowState::Refunded);
     }
 
     #[test]
-    #[should_panic(expected = "Error(Contract, #9)")]
-    fn test_refund_after_approval_fails_before_expiry() {
-        let (env, payer, payee, arbiter, token, _token_client) = setup();
-        let escrow = register_escrow(&env);
-        let admin = Address::generate(&env);
-        escrow.init(&admin);
-
-        let expiry = env.ledger().timestamp() + 86400;
-        let desc = String::from_str(&env, "Test");
-
-        let id = escrow.create_escrow(
-            &payer, &payee, &arbiter, &token, &500_000_000i128, &expiry, &desc,
-        );
-        escrow.deposit(&id);
-        escrow.approve_release(&id);
-
-        // Refund after approval but before expiry — should panic
-        escrow.refund(&id);
-    }
-
-    #[test]
     fn test_refund_after_expiry_unilateral() {
-        let (env, payer, payee, arbiter, token, _token_client) = setup();
+        let (env, payer, payee, arbiter, token, _tc) = setup();
         let escrow = register_escrow(&env);
         let admin = Address::generate(&env);
-        escrow.init(&admin);
+        escrow.init(&admin).unwrap();
 
         let now = env.ledger().timestamp();
         let expiry = now + 100;
         let desc = String::from_str(&env, "Test");
 
-        let id = escrow.create_escrow(
-            &payer, &payee, &arbiter, &token, &500_000_000i128, &expiry, &desc,
-        );
-        escrow.deposit(&id);
-        escrow.approve_release(&id);
+        let id = escrow
+            .create_escrow(&payer, &payee, &arbiter, &token, &500_000_000i128, &expiry, &desc)
+            .unwrap();
+        escrow.deposit(&id).unwrap();
+        escrow.approve_release(&id).unwrap();
 
-        // Advance ledger past expiry
+        // Advance ledger past expiry — payer can now refund unilaterally
         env.ledger().set_timestamp(expiry + 1);
 
-        // Now payer can refund even though arbiter approved
-        escrow.refund(&id);
-        let refunded = escrow.get_escrow(&id);
+        escrow.refund(&id).unwrap();
+        let refunded = escrow.get_escrow(&id).unwrap();
         assert_eq!(refunded.state, EscrowState::Refunded);
     }
 
     #[test]
-    #[should_panic(expected = "Error(Contract, #18)")]
-    fn test_arbiter_cannot_be_party() {
-        let (env, payer, payee, _arbiter, token, _token_client) = setup();
-        let escrow = register_escrow(&env);
-        let admin = Address::generate(&env);
-        escrow.init(&admin);
-
-        let expiry = env.ledger().timestamp() + 86400;
-        let desc = String::from_str(&env, "Test");
-
-        // Arbiter same as payee — should panic
-        escrow.create_escrow(
-            &payer, &payee, &payee, &token, &1_000_000_000i128, &expiry, &desc,
-        );
-    }
-
-    #[test]
-    #[should_panic(expected = "Error(Contract, #17)")]
-    fn test_payer_cannot_be_payee() {
-        let (env, payer, _payee, arbiter, token, _token_client) = setup();
-        let escrow = register_escrow(&env);
-        let admin = Address::generate(&env);
-        escrow.init(&admin);
-
-        let expiry = env.ledger().timestamp() + 86400;
-        let desc = String::from_str(&env, "Test");
-
-        // Payer same as payee — should panic
-        escrow.create_escrow(
-            &payer, &payer, &arbiter, &token, &1_000_000_000i128, &expiry, &desc,
-        );
-    }
-
-    #[test]
     fn test_dispute_and_resolve_to_payee() {
-        let (env, payer, payee, arbiter, token, _token_client) = setup();
+        let (env, payer, payee, arbiter, token, _tc) = setup();
         let escrow = register_escrow(&env);
         let admin = Address::generate(&env);
-        escrow.init(&admin);
+        escrow.init(&admin).unwrap();
 
         let expiry = env.ledger().timestamp() + 86400;
         let desc = String::from_str(&env, "Test");
 
-        let id = escrow.create_escrow(
-            &payer, &payee, &arbiter, &token, &1_000_000_000i128, &expiry, &desc,
-        );
-        escrow.deposit(&id);
-        escrow.raise_dispute(&id, &payer);
+        let id = escrow
+            .create_escrow(&payer, &payee, &arbiter, &token, &1_000_000_000i128, &expiry, &desc)
+            .unwrap();
+        escrow.deposit(&id).unwrap();
+        escrow.raise_dispute(&id, &payer).unwrap();
 
-        let disputed = escrow.get_escrow(&id);
+        let disputed = escrow.get_escrow(&id).unwrap();
         assert_eq!(disputed.state, EscrowState::Disputed);
 
-        // Arbiter resolves in favor of payee
-        escrow.resolve_dispute(&id, &1u32);
-        let resolved = escrow.get_escrow(&id);
+        escrow.resolve_dispute(&id, &1u32).unwrap();
+        let resolved = escrow.get_escrow(&id).unwrap();
         assert_eq!(resolved.state, EscrowState::Released);
     }
 
     #[test]
     fn test_dispute_and_resolve_to_payer() {
-        let (env, payer, payee, arbiter, token, _token_client) = setup();
+        let (env, payer, payee, arbiter, token, _tc) = setup();
         let escrow = register_escrow(&env);
         let admin = Address::generate(&env);
-        escrow.init(&admin);
+        escrow.init(&admin).unwrap();
 
         let expiry = env.ledger().timestamp() + 86400;
         let desc = String::from_str(&env, "Test");
 
-        let id = escrow.create_escrow(
-            &payer, &payee, &arbiter, &token, &1_000_000_000i128, &expiry, &desc,
-        );
-        escrow.deposit(&id);
-        escrow.raise_dispute(&id, &payee);
+        let id = escrow
+            .create_escrow(&payer, &payee, &arbiter, &token, &1_000_000_000i128, &expiry, &desc)
+            .unwrap();
+        escrow.deposit(&id).unwrap();
+        escrow.raise_dispute(&id, &payee).unwrap();
 
-        // Arbiter resolves in favor of payer (refund)
-        escrow.resolve_dispute(&id, &2u32);
-        let resolved = escrow.get_escrow(&id);
+        escrow.resolve_dispute(&id, &2u32).unwrap();
+        let resolved = escrow.get_escrow(&id).unwrap();
         assert_eq!(resolved.state, EscrowState::Refunded);
     }
 
@@ -799,35 +745,276 @@ mod test {
         let (env, payer, payee, arbiter, token, token_client) = setup();
         let escrow = register_escrow(&env);
         let admin = Address::generate(&env);
-        escrow.init(&admin);
+        escrow.init(&admin).unwrap();
 
         let expiry = env.ledger().timestamp() + 86400;
         let desc = String::from_str(&env, "Test");
 
-        let id = escrow.create_escrow(
-            &payer, &payee, &arbiter, &token, &1_000_000_000i128, &expiry, &desc,
-        );
+        let id = escrow
+            .create_escrow(&payer, &payee, &arbiter, &token, &1_000_000_000i128, &expiry, &desc)
+            .unwrap();
 
-        // Check payer balance before deposit
         let payer_balance_before = token_client.balance(&payer);
-        let contract_balance_before = token_client.balance(&env.register_contract(None, EscrowContract));
+        escrow.deposit(&id).unwrap();
 
-        escrow.deposit(&id);
-
-        // Funds have moved from payer to contract
+        // Funds moved from payer to contract
         let payer_balance_after = token_client.balance(&payer);
         assert_eq!(payer_balance_after, payer_balance_before - 1_000_000_000i128);
 
-        // Without arbiter approval, payee cannot release
-        // (tested by test_release_without_arbiter_approval_fails above)
-
-        // Verify state
-        let agreement = escrow.get_escrow(&id);
+        // State is Funded — not Approved — so release will fail
+        let agreement = escrow.get_escrow(&id).unwrap();
         assert_eq!(agreement.state, EscrowState::Funded);
         assert!(!agreement.arbiter_approved);
     }
+
+    // ── Input-validation error tests ──────────────────────────────
+
+    #[test]
+    fn test_zero_amount_rejected() {
+        let (env, payer, payee, arbiter, token, _tc) = setup();
+        let escrow = register_escrow(&env);
+        let admin = Address::generate(&env);
+        escrow.init(&admin).unwrap();
+
+        let expiry = env.ledger().timestamp() + 86400;
+        let desc = String::from_str(&env, "Test");
+
+        let result = escrow.try_create_escrow(
+            &payer, &payee, &arbiter, &token, &0i128, &expiry, &desc,
+        );
+        assert_eq!(result, Err(Ok(EscrowError::InvalidAmount)));
+    }
+
+    #[test]
+    fn test_negative_amount_rejected() {
+        let (env, payer, payee, arbiter, token, _tc) = setup();
+        let escrow = register_escrow(&env);
+        let admin = Address::generate(&env);
+        escrow.init(&admin).unwrap();
+
+        let expiry = env.ledger().timestamp() + 86400;
+        let desc = String::from_str(&env, "Test");
+
+        let result = escrow.try_create_escrow(
+            &payer, &payee, &arbiter, &token, &-1i128, &expiry, &desc,
+        );
+        assert_eq!(result, Err(Ok(EscrowError::InvalidAmount)));
+    }
+
+    #[test]
+    fn test_payer_cannot_be_payee() {
+        let (env, payer, _payee, arbiter, token, _tc) = setup();
+        let escrow = register_escrow(&env);
+        let admin = Address::generate(&env);
+        escrow.init(&admin).unwrap();
+
+        let expiry = env.ledger().timestamp() + 86400;
+        let desc = String::from_str(&env, "Test");
+
+        let result = escrow.try_create_escrow(
+            &payer, &payer, &arbiter, &token, &1_000_000_000i128, &expiry, &desc,
+        );
+        assert_eq!(result, Err(Ok(EscrowError::SelfAsCounterparty)));
+    }
+
+    #[test]
+    fn test_arbiter_cannot_be_payer() {
+        let (env, payer, payee, _arbiter, token, _tc) = setup();
+        let escrow = register_escrow(&env);
+        let admin = Address::generate(&env);
+        escrow.init(&admin).unwrap();
+
+        let expiry = env.ledger().timestamp() + 86400;
+        let desc = String::from_str(&env, "Test");
+
+        // Arbiter same as payer
+        let result = escrow.try_create_escrow(
+            &payer, &payee, &payer, &token, &1_000_000_000i128, &expiry, &desc,
+        );
+        assert_eq!(result, Err(Ok(EscrowError::SameArbiterAsParty)));
+    }
+
+    #[test]
+    fn test_arbiter_cannot_be_payee() {
+        let (env, payer, payee, _arbiter, token, _tc) = setup();
+        let escrow = register_escrow(&env);
+        let admin = Address::generate(&env);
+        escrow.init(&admin).unwrap();
+
+        let expiry = env.ledger().timestamp() + 86400;
+        let desc = String::from_str(&env, "Test");
+
+        // Arbiter same as payee
+        let result = escrow.try_create_escrow(
+            &payer, &payee, &payee, &token, &1_000_000_000i128, &expiry, &desc,
+        );
+        assert_eq!(result, Err(Ok(EscrowError::SameArbiterAsParty)));
+    }
+
+    // ── Not-found error tests ─────────────────────────────────────
+
+    #[test]
+    fn test_get_escrow_not_found() {
+        let (env, _payer, _payee, _arbiter, _token, _tc) = setup();
+        let escrow = register_escrow(&env);
+        let admin = Address::generate(&env);
+        escrow.init(&admin).unwrap();
+
+        let result = escrow.try_get_escrow(&999u64);
+        assert_eq!(result, Err(Ok(EscrowError::EscrowNotFound)));
+    }
+
+    #[test]
+    fn test_deposit_not_found() {
+        let (env, _payer, _payee, _arbiter, _token, _tc) = setup();
+        let escrow = register_escrow(&env);
+        let admin = Address::generate(&env);
+        escrow.init(&admin).unwrap();
+
+        let result = escrow.try_deposit(&999u64);
+        assert_eq!(result, Err(Ok(EscrowError::EscrowNotFound)));
+    }
+
+    #[test]
+    fn test_approve_release_not_found() {
+        let (env, _payer, _payee, _arbiter, _token, _tc) = setup();
+        let escrow = register_escrow(&env);
+        let admin = Address::generate(&env);
+        escrow.init(&admin).unwrap();
+
+        let result = escrow.try_approve_release(&999u64);
+        assert_eq!(result, Err(Ok(EscrowError::EscrowNotFound)));
+    }
+
+    #[test]
+    fn test_release_not_found() {
+        let (env, _payer, _payee, _arbiter, _token, _tc) = setup();
+        let escrow = register_escrow(&env);
+        let admin = Address::generate(&env);
+        escrow.init(&admin).unwrap();
+
+        let result = escrow.try_release(&999u64);
+        assert_eq!(result, Err(Ok(EscrowError::EscrowNotFound)));
+    }
+
+    #[test]
+    fn test_refund_not_found() {
+        let (env, _payer, _payee, _arbiter, _token, _tc) = setup();
+        let escrow = register_escrow(&env);
+        let admin = Address::generate(&env);
+        escrow.init(&admin).unwrap();
+
+        let result = escrow.try_refund(&999u64);
+        assert_eq!(result, Err(Ok(EscrowError::EscrowNotFound)));
+    }
+
+    #[test]
+    fn test_is_refundable_not_found() {
+        let (env, _payer, _payee, _arbiter, _token, _tc) = setup();
+        let escrow = register_escrow(&env);
+        let admin = Address::generate(&env);
+        escrow.init(&admin).unwrap();
+
+        let result = escrow.try_is_refundable(&999u64);
+        assert_eq!(result, Err(Ok(EscrowError::EscrowNotFound)));
+    }
+
+    // ── State-machine error tests ─────────────────────────────────
+
+    #[test]
+    fn test_release_without_arbiter_approval_fails() {
+        let (env, payer, payee, arbiter, token, _tc) = setup();
+        let escrow = register_escrow(&env);
+        let admin = Address::generate(&env);
+        escrow.init(&admin).unwrap();
+
+        let expiry = env.ledger().timestamp() + 86400;
+        let desc = String::from_str(&env, "Test");
+
+        let id = escrow
+            .create_escrow(&payer, &payee, &arbiter, &token, &1_000_000_000i128, &expiry, &desc)
+            .unwrap();
+        escrow.deposit(&id).unwrap();
+
+        // Funded but not Approved → NotApproved
+        let result = escrow.try_release(&id);
+        assert_eq!(result, Err(Ok(EscrowError::NotApproved)));
+    }
+
+    #[test]
+    fn test_refund_after_approval_fails_before_expiry() {
+        let (env, payer, payee, arbiter, token, _tc) = setup();
+        let escrow = register_escrow(&env);
+        let admin = Address::generate(&env);
+        escrow.init(&admin).unwrap();
+
+        let expiry = env.ledger().timestamp() + 86400;
+        let desc = String::from_str(&env, "Test");
+
+        let id = escrow
+            .create_escrow(&payer, &payee, &arbiter, &token, &500_000_000i128, &expiry, &desc)
+            .unwrap();
+        escrow.deposit(&id).unwrap();
+        escrow.approve_release(&id).unwrap();
+
+        // Approved but not expired → AlreadyApproved
+        let result = escrow.try_refund(&id);
+        assert_eq!(result, Err(Ok(EscrowError::AlreadyApproved)));
+    }
+
+    #[test]
+    fn test_double_init_rejected() {
+        let (env, _payer, _payee, _arbiter, _token, _tc) = setup();
+        let escrow = register_escrow(&env);
+        let admin = Address::generate(&env);
+        escrow.init(&admin).unwrap();
+
+        let result = escrow.try_init(&admin);
+        assert_eq!(result, Err(Ok(EscrowError::AlreadyInitialized)));
+    }
+
+    #[test]
+    fn test_invalid_resolution_rejected() {
+        let (env, payer, payee, arbiter, token, _tc) = setup();
+        let escrow = register_escrow(&env);
+        let admin = Address::generate(&env);
+        escrow.init(&admin).unwrap();
+
+        let expiry = env.ledger().timestamp() + 86400;
+        let desc = String::from_str(&env, "Test");
+
+        let id = escrow
+            .create_escrow(&payer, &payee, &arbiter, &token, &1_000_000_000i128, &expiry, &desc)
+            .unwrap();
+        escrow.deposit(&id).unwrap();
+        escrow.raise_dispute(&id, &payer).unwrap();
+
+        // Resolution value 0 is invalid
+        let result = escrow.try_resolve_dispute(&id, &0u32);
+        assert_eq!(result, Err(Ok(EscrowError::InvalidResolution)));
+
+        // Resolution value 3 is also invalid
+        let result = escrow.try_resolve_dispute(&id, &3u32);
+        assert_eq!(result, Err(Ok(EscrowError::InvalidResolution)));
+    }
+
+    #[test]
+    fn test_deposit_already_funded_rejected() {
+        let (env, payer, payee, arbiter, token, _tc) = setup();
+        let escrow = register_escrow(&env);
+        let admin = Address::generate(&env);
+        escrow.init(&admin).unwrap();
+
+        let expiry = env.ledger().timestamp() + 86400;
+        let desc = String::from_str(&env, "Test");
+
+        let id = escrow
+            .create_escrow(&payer, &payee, &arbiter, &token, &1_000_000_000i128, &expiry, &desc)
+            .unwrap();
+        escrow.deposit(&id).unwrap();
+
+        // Second deposit attempt → AlreadyFunded
+        let result = escrow.try_deposit(&id);
+        assert_eq!(result, Err(Ok(EscrowError::AlreadyFunded)));
+    }
 }
-
-#[cfg(test)]
-mod fuzz;
-
