@@ -10,24 +10,21 @@
     [],
     [
       [
-        "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAHK3M",
+        "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAFCT4",
         {
           "function": {
             "contract_fn": {
               "contract_address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD2KM",
-              "function_name": "approve_renewal",
+              "function_name": "set_window",
               "args": [
                 {
-                  "u64": "504"
+                  "u64": "906"
                 },
                 {
-                  "u64": "4"
+                  "u64": "1000"
                 },
                 {
-                  "i128": "1000"
-                },
-                {
-                  "u32": 100
+                  "u64": "2000"
                 }
               ]
             }
@@ -36,7 +33,6 @@
         }
       ]
     ],
-    [],
     []
   ],
   "ledger": {
@@ -57,7 +53,7 @@
               "ext": "v0",
               "contract": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD2KM",
               "key": {
-                "u64": "504"
+                "u64": "906"
               },
               "durability": "persistent",
               "val": {
@@ -157,80 +153,10 @@
                 "map": [
                   {
                     "key": {
-                      "symbol": "approval_id"
-                    },
-                    "val": {
-                      "u64": "4"
-                    }
-                  },
-                  {
-                    "key": {
-                      "symbol": "sub_id"
-                    },
-                    "val": {
-                      "u64": "504"
-                    }
-                  }
-                ]
-              },
-              "durability": "persistent",
-              "val": {
-                "map": [
-                  {
-                    "key": {
-                      "symbol": "expires_at"
-                    },
-                    "val": {
-                      "u32": 100
-                    }
-                  },
-                  {
-                    "key": {
-                      "symbol": "max_spend"
-                    },
-                    "val": {
-                      "i128": "1000"
-                    }
-                  },
-                  {
-                    "key": {
-                      "symbol": "sub_id"
-                    },
-                    "val": {
-                      "u64": "504"
-                    }
-                  },
-                  {
-                    "key": {
-                      "symbol": "used"
-                    },
-                    "val": {
-                      "bool": false
-                    }
-                  }
-                ]
-              }
-            }
-          },
-          "ext": "v0"
-        },
-        "live_until": 4095
-      },
-      {
-        "entry": {
-          "last_modified_ledger_seq": 0,
-          "data": {
-            "contract_data": {
-              "ext": "v0",
-              "contract": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD2KM",
-              "key": {
-                "map": [
-                  {
-                    "key": {
                       "symbol": "lifecycle_sub_id"
                     },
                     "val": {
-                      "u64": "504"
+                      "u64": "906"
                     }
                   }
                 ]
@@ -289,10 +215,10 @@
                 "map": [
                   {
                     "key": {
-                      "symbol": "lock_sub_id"
+                      "symbol": "sub_id"
                     },
                     "val": {
-                      "u64": "504"
+                      "u64": "906"
                     }
                   }
                 ]
@@ -302,18 +228,18 @@
                 "map": [
                   {
                     "key": {
-                      "symbol": "lock_timeout"
+                      "symbol": "billing_end"
                     },
                     "val": {
-                      "u32": 200
+                      "u64": "2000"
                     }
                   },
                   {
                     "key": {
-                      "symbol": "locked_at"
+                      "symbol": "billing_start"
                     },
                     "val": {
-                      "u32": 0
+                      "u64": "1000"
                     }
                   }
                 ]
@@ -378,7 +304,7 @@
           "data": {
             "contract_data": {
               "ext": "v0",
-              "contract": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAHK3M",
+              "contract": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAFCT4",
               "key": {
                 "ledger_key_nonce": {
                   "nonce": "801925984706572462"
@@ -408,51 +334,5 @@
       }
     ]
   },
-  "events": [
-    {
-      "event": {
-        "ext": "v0",
-        "contract_id": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD2KM",
-        "type_": "contract",
-        "body": {
-          "v0": {
-            "topics": [
-              {
-                "symbol": "approval_rejected"
-              }
-            ],
-            "data": {
-              "map": [
-                {
-                  "key": {
-                    "symbol": "approval_id"
-                  },
-                  "val": {
-                    "u64": "4"
-                  }
-                },
-                {
-                  "key": {
-                    "symbol": "reason"
-                  },
-                  "val": {
-                    "u32": 3
-                  }
-                },
-                {
-                  "key": {
-                    "symbol": "sub_id"
-                  },
-                  "val": {
-                    "u64": "504"
-                  }
-                }
-              ]
-            }
-          }
-        }
-      },
-      "failed_call": true
-    }
-  ]
+  "events": []
 }

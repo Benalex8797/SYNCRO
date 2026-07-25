@@ -10,6 +10,31 @@
     [],
     [
       [
+        "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAFCT4",
+        {
+          "function": {
+            "contract_fn": {
+              "contract_address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD2KM",
+              "function_name": "set_window",
+              "args": [
+                {
+                  "u64": "904"
+                },
+                {
+                  "u64": "1000"
+                },
+                {
+                  "u64": "2000"
+                }
+              ]
+            }
+          },
+          "sub_invocations": []
+        }
+      ]
+    ],
+    [
+      [
         "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAHK3M",
         {
           "function": {
@@ -18,10 +43,10 @@
               "function_name": "approve_renewal",
               "args": [
                 {
-                  "u64": "504"
+                  "u64": "904"
                 },
                 {
-                  "u64": "4"
+                  "u64": "1"
                 },
                 {
                   "i128": "1000"
@@ -42,7 +67,7 @@
   "ledger": {
     "protocol_version": 26,
     "sequence_number": 0,
-    "timestamp": 0,
+    "timestamp": 2500,
     "network_id": "0000000000000000000000000000000000000000000000000000000000000000",
     "base_reserve": 0,
     "min_persistent_entry_ttl": 4096,
@@ -57,7 +82,7 @@
               "ext": "v0",
               "contract": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD2KM",
               "key": {
-                "u64": "504"
+                "u64": "904"
               },
               "durability": "persistent",
               "val": {
@@ -160,7 +185,7 @@
                       "symbol": "approval_id"
                     },
                     "val": {
-                      "u64": "4"
+                      "u64": "1"
                     }
                   },
                   {
@@ -168,7 +193,7 @@
                       "symbol": "sub_id"
                     },
                     "val": {
-                      "u64": "504"
+                      "u64": "904"
                     }
                   }
                 ]
@@ -197,7 +222,7 @@
                       "symbol": "sub_id"
                     },
                     "val": {
-                      "u64": "504"
+                      "u64": "904"
                     }
                   },
                   {
@@ -230,7 +255,7 @@
                       "symbol": "lifecycle_sub_id"
                     },
                     "val": {
-                      "u64": "504"
+                      "u64": "904"
                     }
                   }
                 ]
@@ -292,7 +317,7 @@
                       "symbol": "lock_sub_id"
                     },
                     "val": {
-                      "u64": "504"
+                      "u64": "904"
                     }
                   }
                 ]
@@ -314,6 +339,52 @@
                     },
                     "val": {
                       "u32": 0
+                    }
+                  }
+                ]
+              }
+            }
+          },
+          "ext": "v0"
+        },
+        "live_until": 4095
+      },
+      {
+        "entry": {
+          "last_modified_ledger_seq": 0,
+          "data": {
+            "contract_data": {
+              "ext": "v0",
+              "contract": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD2KM",
+              "key": {
+                "map": [
+                  {
+                    "key": {
+                      "symbol": "sub_id"
+                    },
+                    "val": {
+                      "u64": "904"
+                    }
+                  }
+                ]
+              },
+              "durability": "persistent",
+              "val": {
+                "map": [
+                  {
+                    "key": {
+                      "symbol": "billing_end"
+                    },
+                    "val": {
+                      "u64": "2000"
+                    }
+                  },
+                  {
+                    "key": {
+                      "symbol": "billing_start"
+                    },
+                    "val": {
+                      "u64": "1000"
                     }
                   }
                 ]
@@ -378,10 +449,30 @@
           "data": {
             "contract_data": {
               "ext": "v0",
-              "contract": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAHK3M",
+              "contract": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAFCT4",
               "key": {
                 "ledger_key_nonce": {
                   "nonce": "801925984706572462"
+                }
+              },
+              "durability": "temporary",
+              "val": "void"
+            }
+          },
+          "ext": "v0"
+        },
+        "live_until": 6311999
+      },
+      {
+        "entry": {
+          "last_modified_ledger_seq": 0,
+          "data": {
+            "contract_data": {
+              "ext": "v0",
+              "contract": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAHK3M",
+              "key": {
+                "ledger_key_nonce": {
+                  "nonce": "5541220902715666415"
                 }
               },
               "durability": "temporary",
@@ -408,51 +499,5 @@
       }
     ]
   },
-  "events": [
-    {
-      "event": {
-        "ext": "v0",
-        "contract_id": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD2KM",
-        "type_": "contract",
-        "body": {
-          "v0": {
-            "topics": [
-              {
-                "symbol": "approval_rejected"
-              }
-            ],
-            "data": {
-              "map": [
-                {
-                  "key": {
-                    "symbol": "approval_id"
-                  },
-                  "val": {
-                    "u64": "4"
-                  }
-                },
-                {
-                  "key": {
-                    "symbol": "reason"
-                  },
-                  "val": {
-                    "u32": 3
-                  }
-                },
-                {
-                  "key": {
-                    "symbol": "sub_id"
-                  },
-                  "val": {
-                    "u64": "504"
-                  }
-                }
-              ]
-            }
-          }
-        }
-      },
-      "failed_call": true
-    }
-  ]
+  "events": []
 }
