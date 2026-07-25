@@ -16,6 +16,10 @@ fn setup() -> (Env, Address, Address) {
     (env, id, admin)
 }
 
+fn usd_string(env: &Env) -> soroban_sdk::String {
+    soroban_sdk::String::from_str(env, "USD")
+}
+
 #[test]
 fn test_renew_works_after_unpause() {
     let (env, id, _admin) = setup();
@@ -25,7 +29,7 @@ fn test_renew_works_after_unpause() {
     let sub_id = 101;
 
     let merchant = Address::generate(&env);
-    client.init_sub(&user, &merchant, &500, &86400, &1000, &sub_id);
+    client.init_sub(&user, &merchant, &500, &86400, &1000, &sub_id, &usd_string(&env));
     client.approve_renewal(&sub_id, &1, &1000, &100);
 
     // Pause then unpause
@@ -34,7 +38,7 @@ fn test_renew_works_after_unpause() {
 
     // Should succeed now
     client.acquire_renewal_lock(&sub_id, &200);
-    let result = client.renew(&sub_id, &1, &500, &3, &10, &20260101, &true);
+    let result = client.renew(&sub_id, &1, &500, &3, &10, &20260101, &true, &usd_string(&env));
     assert!(result);
 }
 
@@ -58,11 +62,11 @@ fn test_renewal_success() {
     let sub_id = 123;
 
     let merchant = Address::generate(&env);
-    client.init_sub(&user, &merchant, &500, &86400, &1000, &sub_id);
+    client.init_sub(&user, &merchant, &500, &86400, &1000, &sub_id, &usd_string(&env));
     client.approve_renewal(&sub_id, &1, &1000, &100);
 
     client.acquire_renewal_lock(&sub_id, &200);
-    let result = client.renew(&sub_id, &1, &500, &3, &10, &20260115, &true);
+    let result = client.renew(&sub_id, &1, &500, &3, &10, &20260115, &true, &usd_string(&env));
     assert!(result);
 
     let data = client.get_sub(&sub_id);
@@ -81,7 +85,7 @@ fn test_retry_logic() {
     let cooldown = 10;
 
     let merchant = Address::generate(&env);
-    client.init_sub(&user, &merchant, &500, &86400, &1000, &sub_id);
+    client.init_sub(&user, &merchant, &500, &86400, &1000, &sub_id, &usd_string(&env));
 
     // First failure (cycle_id same for retries — allowed because failure doesn't store cycle)
     client.approve_renewal(&sub_id, &1, &1000, &200);
@@ -152,17 +156,17 @@ fn test_cooldown_enforcement() {
     let sub_id = 789;
 
     let merchant = Address::generate(&env);
-    client.init_sub(&user, &merchant, &500, &86400, &1000, &sub_id);
+    client.init_sub(&user, &merchant, &500, &86400, &1000, &sub_id, &usd_string(&env));
 
     // Fail once
     client.approve_renewal(&sub_id, &1, &1000, &100);
     client.acquire_renewal_lock(&sub_id, &200);
-    client.renew(&sub_id, &1, &500, &3, &10, &20260301, &false);
+    client.renew(&sub_id, &1, &500, &3, &10, &20260301, &false, &usd_string(&env));
 
     // Try again immediately (cooldown not met)
     client.approve_renewal(&sub_id, &2, &1000, &100);
     client.acquire_renewal_lock(&sub_id, &200);
-    client.renew(&sub_id, &2, &500, &3, &10, &20260301, &false);
+    client.renew(&sub_id, &2, &500, &3, &10, &20260301, &false, &usd_string(&env));
 }
 
 #[test]
@@ -174,12 +178,12 @@ fn test_event_emission_on_success() {
     let sub_id = 999;
 
     let merchant = Address::generate(&env);
-    client.init_sub(&user, &merchant, &500, &86400, &1000, &sub_id);
+    client.init_sub(&user, &merchant, &500, &86400, &1000, &sub_id, &usd_string(&env));
     client.approve_renewal(&sub_id, &1, &1000, &100);
 
     // Successful renewal should emit RenewalSuccess event
     client.acquire_renewal_lock(&sub_id, &200);
-    let result = client.renew(&sub_id, &1, &500, &3, &10, &20260315, &true);
+    let result = client.renew(&sub_id, &1, &500, &3, &10, &20260315, &true, &usd_string(&env));
     assert!(result);
 
     // Verify event was emitted by checking subscription data
@@ -198,12 +202,12 @@ fn test_zero_max_retries() {
     let max_retries = 0;
 
     let merchant = Address::generate(&env);
-    client.init_sub(&user, &merchant, &500, &86400, &1000, &sub_id);
+    client.init_sub(&user, &merchant, &500, &86400, &1000, &sub_id, &usd_string(&env));
     client.approve_renewal(&sub_id, &1, &1000, &100);
 
     // First failure with max_retries = 0 should immediately fail
     client.acquire_renewal_lock(&sub_id, &200);
-    let result = client.renew(&sub_id, &1, &500, &max_retries, &10, &20260401, &false);
+    let result = client.renew(&sub_id, &1, &500, &max_retries, &10, &20260401, &false, &usd_string(&env));
     assert!(!result);
 
     let data = client.get_sub(&sub_id);
@@ -222,7 +226,7 @@ fn test_multiple_failures_then_success() {
     let cooldown = 10;
 
     let merchant = Address::generate(&env);
-    client.init_sub(&user, &merchant, &500, &86400, &1000, &sub_id);
+    client.init_sub(&user, &merchant, &500, &86400, &1000, &sub_id, &usd_string(&env));
 
     // First failure
     client.approve_renewal(&sub_id, &1, &1000, &200);
@@ -269,7 +273,7 @@ fn test_multiple_failures_then_success() {
     // Now succeed - should reset failure count and return to Active
     client.approve_renewal(&sub_id, &3, &1000, &200);
     client.acquire_renewal_lock(&sub_id, &200);
-    let result = client.renew(&sub_id, &3, &500, &max_retries, &cooldown, &20260501, &true);
+    let result = client.renew(&sub_id, &3, &500, &max_retries, &cooldown, &20260501, &true, &usd_string(&env));
     assert!(result);
 
     let data = client.get_sub(&sub_id);
@@ -289,7 +293,7 @@ fn test_cannot_renew_failed_subscription() {
     let cooldown = 10;
 
     let merchant = Address::generate(&env);
-    client.init_sub(&user, &merchant, &500, &86400, &1000, &sub_id);
+    client.init_sub(&user, &merchant, &500, &86400, &1000, &sub_id, &usd_string(&env));
 
     // Fail twice to reach Failed state
     client.approve_renewal(&sub_id, &1, &1000, &200);
@@ -331,7 +335,7 @@ fn test_cannot_renew_failed_subscription() {
     // Try to renew a FAILED subscription - should panic
     client.approve_renewal(&sub_id, &3, &1000, &200);
     client.acquire_renewal_lock(&sub_id, &200);
-    client.renew(&sub_id, &3, &500, &max_retries, &cooldown, &20260701, &true);
+    client.renew(&sub_id, &3, &500, &max_retries, &cooldown, &20260701, &true, &usd_string(&env));
 }
 
 // ── Approval system tests ────────────────────────────────────────
@@ -346,14 +350,14 @@ fn test_approval_required_for_renewal() {
     let approval_id = 1;
 
     let merchant = Address::generate(&env);
-    client.init_sub(&user, &merchant, &500, &86400, &1000, &sub_id);
+    client.init_sub(&user, &merchant, &500, &86400, &1000, &sub_id, &usd_string(&env));
 
     // Create approval
     client.approve_renewal(&sub_id, &approval_id, &1000, &100);
 
     // Renew with valid approval
     client.acquire_renewal_lock(&sub_id, &200);
-    let result = client.renew(&sub_id, &approval_id, &500, &3, &10, &20260801, &true);
+    let result = client.renew(&sub_id, &approval_id, &500, &3, &10, &20260801, &true, &usd_string(&env));
     assert!(result);
 }
 
@@ -367,11 +371,11 @@ fn test_renewal_without_approval_fails() {
     let sub_id = 501;
 
     let merchant = Address::generate(&env);
-    client.init_sub(&user, &merchant, &500, &86400, &1000, &sub_id);
+    client.init_sub(&user, &merchant, &500, &86400, &1000, &sub_id, &usd_string(&env));
 
     // Try to renew without creating approval
     client.acquire_renewal_lock(&sub_id, &200);
-    client.renew(&sub_id, &999, &500, &3, &10, &20260901, &true);
+    client.renew(&sub_id, &999, &500, &3, &10, &20260901, &true, &usd_string(&env));
 }
 
 #[test]
@@ -385,12 +389,12 @@ fn test_approval_cannot_be_reused() {
     let approval_id = 2;
 
     let merchant = Address::generate(&env);
-    client.init_sub(&user, &merchant, &500, &86400, &1000, &sub_id);
+    client.init_sub(&user, &merchant, &500, &86400, &1000, &sub_id, &usd_string(&env));
     client.approve_renewal(&sub_id, &approval_id, &1000, &100);
 
     // First use - should succeed
     client.acquire_renewal_lock(&sub_id, &200);
-    client.renew(&sub_id, &approval_id, &500, &3, &10, &20261001, &true);
+    client.renew(&sub_id, &approval_id, &500, &3, &10, &20261001, &true, &usd_string(&env));
 
     env.ledger().with_mut(|li| {
         li.sequence_number = 20;
@@ -398,7 +402,7 @@ fn test_approval_cannot_be_reused() {
 
     // Second use - should fail (already used) — use different cycle_id to bypass cycle guard
     client.acquire_renewal_lock(&sub_id, &200);
-    client.renew(&sub_id, &approval_id, &500, &3, &10, &20261101, &true);
+    client.renew(&sub_id, &approval_id, &500, &3, &10, &20261101, &true, &usd_string(&env));
 }
 
 #[test]
@@ -412,7 +416,7 @@ fn test_expired_approval_rejected() {
     let approval_id = 3;
 
     let merchant = Address::generate(&env);
-    client.init_sub(&user, &merchant, &500, &86400, &1000, &sub_id);
+    client.init_sub(&user, &merchant, &500, &86400, &1000, &sub_id, &usd_string(&env));
 
     // Create approval that expires at ledger 50
     client.approve_renewal(&sub_id, &approval_id, &1000, &50);
@@ -424,7 +428,7 @@ fn test_expired_approval_rejected() {
 
     // Try to use expired approval
     client.acquire_renewal_lock(&sub_id, &200);
-    client.renew(&sub_id, &approval_id, &500, &3, &10, &20261201, &true);
+    client.renew(&sub_id, &approval_id, &500, &3, &10, &20261201, &true, &usd_string(&env));
 }
 
 #[test]
@@ -438,14 +442,14 @@ fn test_amount_exceeds_max_spend() {
     let approval_id = 4;
 
     let merchant = Address::generate(&env);
-    client.init_sub(&user, &merchant, &500, &86400, &1000, &sub_id);
+    client.init_sub(&user, &merchant, &500, &86400, &1000, &sub_id, &usd_string(&env));
 
     // Create approval with max_spend = 1000
     client.approve_renewal(&sub_id, &approval_id, &1000, &100);
 
     // Try to renew with amount > max_spend
     client.acquire_renewal_lock(&sub_id, &200);
-    client.renew(&sub_id, &approval_id, &1500, &3, &10, &20270101, &true);
+    client.renew(&sub_id, &approval_id, &1500, &3, &10, &20270101, &true, &usd_string(&env));
 }
 
 #[test]
@@ -457,7 +461,7 @@ fn test_multiple_approvals_for_same_subscription() {
     let sub_id = 505;
 
     let merchant = Address::generate(&env);
-    client.init_sub(&user, &merchant, &500, &86400, &5000, &sub_id);
+    client.init_sub(&user, &merchant, &500, &86400, &5000, &sub_id, &usd_string(&env));
 
     // Create multiple approvals
     client.approve_renewal(&sub_id, &1, &1000, &100);
@@ -465,7 +469,7 @@ fn test_multiple_approvals_for_same_subscription() {
 
     // Use first approval
     client.acquire_renewal_lock(&sub_id, &200);
-    client.renew(&sub_id, &1, &500, &3, &10, &20270201, &true);
+    client.renew(&sub_id, &1, &500, &3, &10, &20270201, &true, &usd_string(&env));
 
     env.ledger().with_mut(|li| {
         li.sequence_number = 20;
@@ -473,7 +477,7 @@ fn test_multiple_approvals_for_same_subscription() {
 
     // Use second approval — different cycle_id since first succeeded
     client.acquire_renewal_lock(&sub_id, &200);
-    let result = client.renew(&sub_id, &2, &1500, &3, &10, &20270301, &true);
+    let result = client.renew(&sub_id, &2, &1500, &3, &10, &20270301, &true, &usd_string(&env));
     assert!(result);
 }
 
@@ -490,18 +494,18 @@ fn test_duplicate_cycle_rejected_after_success() {
     let cycle_id = 20260315;
 
     let merchant = Address::generate(&env);
-    client.init_sub(&user, &merchant, &500, &86400, &1000, &sub_id);
+    client.init_sub(&user, &merchant, &500, &86400, &1000, &sub_id, &usd_string(&env));
 
     // First renewal succeeds — stores cycle_id
     client.approve_renewal(&sub_id, &1, &1000, &100);
     client.acquire_renewal_lock(&sub_id, &200);
-    let result = client.renew(&sub_id, &1, &500, &3, &10, &cycle_id, &true);
+    let result = client.renew(&sub_id, &1, &500, &3, &10, &cycle_id, &true, &usd_string(&env));
     assert!(result);
 
     // Second renewal with same cycle_id — should panic
     client.approve_renewal(&sub_id, &2, &1000, &100);
     client.acquire_renewal_lock(&sub_id, &200);
-    client.renew(&sub_id, &2, &500, &3, &10, &cycle_id, &true);
+    client.renew(&sub_id, &2, &500, &3, &10, &cycle_id, &true, &usd_string(&env));
 }
 
 #[test]
@@ -514,12 +518,12 @@ fn test_retry_same_cycle_allowed_after_failure() {
     let cycle_id = 20260315;
 
     let merchant = Address::generate(&env);
-    client.init_sub(&user, &merchant, &500, &86400, &1000, &sub_id);
+    client.init_sub(&user, &merchant, &500, &86400, &1000, &sub_id, &usd_string(&env));
 
     // First attempt fails — does NOT store cycle_id
     client.approve_renewal(&sub_id, &1, &1000, &200);
     client.acquire_renewal_lock(&sub_id, &200);
-    let result = client.renew(&sub_id, &1, &500, &3, &10, &cycle_id, &false);
+    let result = client.renew(&sub_id, &1, &500, &3, &10, &cycle_id, &false, &usd_string(&env));
     assert!(!result);
 
     // Advance ledger past cooldown
@@ -530,7 +534,7 @@ fn test_retry_same_cycle_allowed_after_failure() {
     // Retry with same cycle_id — should succeed because failure didn't record cycle
     client.approve_renewal(&sub_id, &2, &1000, &200);
     client.acquire_renewal_lock(&sub_id, &200);
-    let result = client.renew(&sub_id, &2, &500, &3, &10, &cycle_id, &true);
+    let result = client.renew(&sub_id, &2, &500, &3, &10, &cycle_id, &true, &usd_string(&env));
     assert!(result);
 }
 
@@ -543,18 +547,18 @@ fn test_different_cycle_allowed_after_success() {
     let sub_id = 602;
 
     let merchant = Address::generate(&env);
-    client.init_sub(&user, &merchant, &500, &86400, &1000, &sub_id);
+    client.init_sub(&user, &merchant, &500, &86400, &1000, &sub_id, &usd_string(&env));
 
     // First cycle succeeds
     client.approve_renewal(&sub_id, &1, &1000, &100);
     client.acquire_renewal_lock(&sub_id, &200);
-    let result = client.renew(&sub_id, &1, &500, &3, &10, &20260315, &true);
+    let result = client.renew(&sub_id, &1, &500, &3, &10, &20260315, &true, &usd_string(&env));
     assert!(result);
 
     // Different cycle_id — should succeed
     client.approve_renewal(&sub_id, &2, &1000, &100);
     client.acquire_renewal_lock(&sub_id, &200);
-    let result = client.renew(&sub_id, &2, &500, &3, &10, &20260415, &true);
+    let result = client.renew(&sub_id, &2, &500, &3, &10, &20260415, &true, &usd_string(&env));
     assert!(result);
 }
 
@@ -567,12 +571,12 @@ fn test_first_renewal_always_allowed() {
     let sub_id = 603;
 
     let merchant = Address::generate(&env);
-    client.init_sub(&user, &merchant, &500, &86400, &1000, &sub_id);
+    client.init_sub(&user, &merchant, &500, &86400, &1000, &sub_id, &usd_string(&env));
 
     // First renewal ever — no stored cycle, guard passes
     client.approve_renewal(&sub_id, &1, &1000, &100);
     client.acquire_renewal_lock(&sub_id, &200);
-    let result = client.renew(&sub_id, &1, &500, &3, &10, &20260101, &true);
+    let result = client.renew(&sub_id, &1, &500, &3, &10, &20260101, &true, &usd_string(&env));
     assert!(result);
 
     let data = client.get_sub(&sub_id);
@@ -588,7 +592,7 @@ fn test_cancel_sub() {
     let sub_id = 600;
 
     let merchant = Address::generate(&env);
-    client.init_sub(&user, &merchant, &500, &86400, &1000, &sub_id);
+    client.init_sub(&user, &merchant, &500, &86400, &1000, &sub_id, &usd_string(&env));
 
     // Cancel subscription
     client.cancel_sub(&sub_id);
@@ -607,7 +611,7 @@ fn test_cannot_cancel_twice() {
     let sub_id = 601;
 
     let merchant = Address::generate(&env);
-    client.init_sub(&user, &merchant, &500, &86400, &1000, &sub_id);
+    client.init_sub(&user, &merchant, &500, &86400, &1000, &sub_id, &usd_string(&env));
 
     client.cancel_sub(&sub_id);
     client.cancel_sub(&sub_id);
@@ -631,12 +635,12 @@ fn test_per_subscription_spending_cap() {
     let sub_id = 700;
 
     // Cap is 1000
-    client.init_sub(&user, &merchant, &500, &86400, &1000, &sub_id);
+    client.init_sub(&user, &merchant, &500, &86400, &1000, &sub_id, &usd_string(&env));
     client.approve_renewal(&sub_id, &1, &2000, &100);
 
     // Try to renew with 1500 (exceeds 1000 cap)
     client.acquire_renewal_lock(&sub_id, &200);
-    client.renew(&sub_id, &1, &1500, &3, &10, &20270101, &true);
+    client.renew(&sub_id, &1, &1500, &3, &10, &20270101, &true, &usd_string(&env));
 }
 
 #[test]
@@ -653,19 +657,19 @@ fn test_global_user_spending_cap() {
     let sub_id_1 = 701;
     let sub_id_2 = 702;
 
-    client.init_sub(&user, &merchant, &1500, &86400, &5000, &sub_id_1);
-    client.init_sub(&user, &merchant, &1000, &86400, &5000, &sub_id_2);
+    client.init_sub(&user, &merchant, &1500, &86400, &5000, &sub_id_1, &usd_string(&env));
+    client.init_sub(&user, &merchant, &1000, &86400, &5000, &sub_id_2, &usd_string(&env));
 
     client.approve_renewal(&sub_id_1, &1, &2000, &100);
     client.approve_renewal(&sub_id_2, &1, &2000, &100);
 
     // First renewal: 1500. Total spent: 1500 / 2000
     client.acquire_renewal_lock(&sub_id_1, &200);
-    client.renew(&sub_id_1, &1, &1500, &3, &10, &20260101, &true);
+    client.renew(&sub_id_1, &1, &1500, &3, &10, &20260101, &true, &usd_string(&env));
 
     // Second renewal: 1000. Total would be 2500 / 2000 -> Should panic
     client.acquire_renewal_lock(&sub_id_2, &200);
-    client.renew(&sub_id_2, &1, &1000, &3, &10, &20260101, &true);
+    client.renew(&sub_id_2, &1, &1000, &3, &10, &20260101, &true, &usd_string(&env));
 }
 
 // ── Renewal lock tests ──────────────────────────────────────────
@@ -757,11 +761,11 @@ fn test_renew_without_lock_panics() {
     let sub_id = 705;
 
     let merchant = Address::generate(&env);
-    client.init_sub(&user, &merchant, &500, &86400, &1000, &sub_id);
+    client.init_sub(&user, &merchant, &500, &86400, &1000, &sub_id, &usd_string(&env));
     client.approve_renewal(&sub_id, &1, &1000, &100);
 
     // Renew without acquiring lock — should panic
-    client.renew(&sub_id, &1, &500, &3, &10, &20260101, &true);
+    client.renew(&sub_id, &1, &500, &3, &10, &20260101, &true, &usd_string(&env));
 }
 
 #[test]
@@ -773,13 +777,13 @@ fn test_renew_with_lock_succeeds_and_auto_releases() {
     let sub_id = 706;
 
     let merchant = Address::generate(&env);
-    client.init_sub(&user, &merchant, &500, &86400, &1000, &sub_id);
+    client.init_sub(&user, &merchant, &500, &86400, &1000, &sub_id, &usd_string(&env));
     client.approve_renewal(&sub_id, &1, &1000, &100);
 
     client.acquire_renewal_lock(&sub_id, &200);
     assert!(client.get_renewal_lock(&sub_id).is_some());
 
-    let result = client.renew(&sub_id, &1, &500, &3, &10, &20260101, &true);
+    let result = client.renew(&sub_id, &1, &500, &3, &10, &20260101, &true, &usd_string(&env));
     assert!(result);
 
     // Lock should be auto-released after renew
@@ -795,13 +799,13 @@ fn test_renew_failure_also_releases_lock() {
     let sub_id = 707;
 
     let merchant = Address::generate(&env);
-    client.init_sub(&user, &merchant, &500, &86400, &1000, &sub_id);
+    client.init_sub(&user, &merchant, &500, &86400, &1000, &sub_id, &usd_string(&env));
     client.approve_renewal(&sub_id, &1, &1000, &200);
 
     client.acquire_renewal_lock(&sub_id, &200);
     assert!(client.get_renewal_lock(&sub_id).is_some());
 
-    let result = client.renew(&sub_id, &1, &500, &3, &10, &20260101, &false);
+    let result = client.renew(&sub_id, &1, &500, &3, &10, &20260101, &false, &usd_string(&env));
     assert!(!result);
 
     // Lock should be auto-released even after failure
@@ -818,7 +822,7 @@ fn test_renew_with_expired_lock_panics() {
     let sub_id = 708;
 
     let merchant = Address::generate(&env);
-    client.init_sub(&user, &merchant, &500, &86400, &1000, &sub_id);
+    client.init_sub(&user, &merchant, &500, &86400, &1000, &sub_id, &usd_string(&env));
     client.approve_renewal(&sub_id, &1, &1000, &200);
 
     client.acquire_renewal_lock(&sub_id, &50);
@@ -829,7 +833,7 @@ fn test_renew_with_expired_lock_panics() {
     });
 
     // Renew with expired lock — should panic
-    client.renew(&sub_id, &1, &500, &3, &10, &20260101, &true);
+    client.renew(&sub_id, &1, &500, &3, &10, &20260101, &true, &usd_string(&env));
 }
 
 #[test]
@@ -860,7 +864,7 @@ fn test_lifecycle_created_on_init() {
     let sub_id = 800;
 
     let merchant = Address::generate(&env);
-    client.init_sub(&user, &merchant, &500, &86400, &1000, &sub_id);
+    client.init_sub(&user, &merchant, &500, &86400, &1000, &sub_id, &usd_string(&env));
 
     let lc = client.get_lifecycle(&sub_id);
     assert_eq!(lc.created_at, 1700000000);
@@ -882,7 +886,7 @@ fn test_lifecycle_renewed_at_updated_on_success() {
     let sub_id = 801;
 
     let merchant = Address::generate(&env);
-    client.init_sub(&user, &merchant, &500, &86400, &1000, &sub_id);
+    client.init_sub(&user, &merchant, &500, &86400, &1000, &sub_id, &usd_string(&env));
 
     env.ledger().with_mut(|li| {
         li.timestamp = 1700100000;
@@ -890,7 +894,7 @@ fn test_lifecycle_renewed_at_updated_on_success() {
 
     client.approve_renewal(&sub_id, &1, &1000, &100);
     client.acquire_renewal_lock(&sub_id, &200);
-    client.renew(&sub_id, &1, &500, &3, &10, &20260101, &true);
+    client.renew(&sub_id, &1, &500, &3, &10, &20260101, &true, &usd_string(&env));
 
     let lc = client.get_lifecycle(&sub_id);
     assert_eq!(lc.created_at, 1700000000);
@@ -912,7 +916,7 @@ fn test_lifecycle_canceled_at_set_on_cancel() {
     let sub_id = 802;
 
     let merchant = Address::generate(&env);
-    client.init_sub(&user, &merchant, &500, &86400, &1000, &sub_id);
+    client.init_sub(&user, &merchant, &500, &86400, &1000, &sub_id, &usd_string(&env));
 
     env.ledger().with_mut(|li| {
         li.timestamp = 1700200000;
@@ -938,7 +942,7 @@ fn test_lifecycle_activated_at_updated_on_recovery_from_retrying() {
     let sub_id = 803;
 
     let merchant = Address::generate(&env);
-    client.init_sub(&user, &merchant, &500, &86400, &1000, &sub_id);
+    client.init_sub(&user, &merchant, &500, &86400, &1000, &sub_id, &usd_string(&env));
 
     // Fail once to enter Retrying
     env.ledger().with_mut(|li| {
@@ -946,7 +950,7 @@ fn test_lifecycle_activated_at_updated_on_recovery_from_retrying() {
     });
     client.approve_renewal(&sub_id, &1, &1000, &200);
     client.acquire_renewal_lock(&sub_id, &200);
-    client.renew(&sub_id, &1, &500, &3, &10, &20260201, &false);
+    client.renew(&sub_id, &1, &500, &3, &10, &20260201, &false, &usd_string(&env));
 
     let data = client.get_sub(&sub_id);
     assert_eq!(data.state, SubscriptionState::Retrying);
@@ -958,7 +962,7 @@ fn test_lifecycle_activated_at_updated_on_recovery_from_retrying() {
     });
     client.approve_renewal(&sub_id, &2, &1000, &200);
     client.acquire_renewal_lock(&sub_id, &200);
-    client.renew(&sub_id, &2, &500, &3, &10, &20260201, &true);
+    client.renew(&sub_id, &2, &500, &3, &10, &20260201, &true, &usd_string(&env));
 
     let lc = client.get_lifecycle(&sub_id);
     assert_eq!(lc.created_at, 1700000000);
@@ -980,14 +984,14 @@ fn test_lifecycle_not_updated_on_renewal_failure() {
     let sub_id = 804;
 
     let merchant = Address::generate(&env);
-    client.init_sub(&user, &merchant, &500, &86400, &1000, &sub_id);
+    client.init_sub(&user, &merchant, &500, &86400, &1000, &sub_id, &usd_string(&env));
 
     env.ledger().with_mut(|li| {
         li.timestamp = 1700100000;
     });
     client.approve_renewal(&sub_id, &1, &1000, &200);
     client.acquire_renewal_lock(&sub_id, &200);
-    client.renew(&sub_id, &1, &500, &3, &10, &20260301, &false);
+    client.renew(&sub_id, &1, &500, &3, &10, &20260301, &false, &usd_string(&env));
 
     let lc = client.get_lifecycle(&sub_id);
     assert_eq!(lc.last_renewed_at, 0); // unchanged on failure
@@ -1007,7 +1011,7 @@ fn test_lifecycle_multiple_renewals_update_last_renewed() {
     let sub_id = 805;
 
     let merchant = Address::generate(&env);
-    client.init_sub(&user, &merchant, &500, &86400, &1000, &sub_id);
+    client.init_sub(&user, &merchant, &500, &86400, &1000, &sub_id, &usd_string(&env));
 
     // First renewal
     env.ledger().with_mut(|li| {
@@ -1015,7 +1019,7 @@ fn test_lifecycle_multiple_renewals_update_last_renewed() {
     });
     client.approve_renewal(&sub_id, &1, &1000, &100);
     client.acquire_renewal_lock(&sub_id, &200);
-    client.renew(&sub_id, &1, &500, &3, &10, &20260401, &true);
+    client.renew(&sub_id, &1, &500, &3, &10, &20260401, &true, &usd_string(&env));
 
     let lc = client.get_lifecycle(&sub_id);
     assert_eq!(lc.last_renewed_at, 1700100000);
@@ -1026,7 +1030,7 @@ fn test_lifecycle_multiple_renewals_update_last_renewed() {
     });
     client.approve_renewal(&sub_id, &2, &1000, &100);
     client.acquire_renewal_lock(&sub_id, &200);
-    client.renew(&sub_id, &2, &500, &3, &10, &20260501, &true);
+    client.renew(&sub_id, &2, &500, &3, &10, &20260501, &true, &usd_string(&env));
 
     let lc = client.get_lifecycle(&sub_id);
     assert_eq!(lc.last_renewed_at, 1700200000);
@@ -1052,7 +1056,7 @@ fn test_window_start_must_be_before_end() {
     let user = Address::generate(&env);
     let sub_id = 900u64;
     let merchant = Address::generate(&env);
-    client.init_sub(&user, &merchant, &500, &86400, &1000, &sub_id);
+    client.init_sub(&user, &merchant, &500, &86400, &1000, &sub_id, &usd_string(&env));
     // start == end — should panic
     client.set_window(&sub_id, &1735689600u64, &1735689600u64);
 }
@@ -1066,7 +1070,7 @@ fn test_window_start_after_end_rejected() {
     let user = Address::generate(&env);
     let sub_id = 901u64;
     let merchant = Address::generate(&env);
-    client.init_sub(&user, &merchant, &500, &86400, &1000, &sub_id);
+    client.init_sub(&user, &merchant, &500, &86400, &1000, &sub_id, &usd_string(&env));
     // start > end — should panic
     client.set_window(&sub_id, &1735862400u64, &1735689600u64);
 }
@@ -1079,7 +1083,7 @@ fn test_renew_within_window_succeeds() {
     let user = Address::generate(&env);
     let sub_id = 902u64;
     let merchant = Address::generate(&env);
-    client.init_sub(&user, &merchant, &500, &86400, &1000, &sub_id);
+    client.init_sub(&user, &merchant, &500, &86400, &1000, &sub_id, &usd_string(&env));
 
     // Window: [1000, 2000]
     client.set_window(&sub_id, &1000u64, &2000u64);
@@ -1091,7 +1095,7 @@ fn test_renew_within_window_succeeds() {
 
     client.approve_renewal(&sub_id, &1, &1000, &100);
     client.acquire_renewal_lock(&sub_id, &200);
-    let result = client.renew(&sub_id, &1, &500, &3, &10, &20260101u64, &true);
+    let result = client.renew(&sub_id, &1, &500, &3, &10, &20260101u64, &true, &usd_string(&env));
     assert!(result);
 }
 
@@ -1104,7 +1108,7 @@ fn test_renew_before_window_panics() {
     let user = Address::generate(&env);
     let sub_id = 903u64;
     let merchant = Address::generate(&env);
-    client.init_sub(&user, &merchant, &500, &86400, &1000, &sub_id);
+    client.init_sub(&user, &merchant, &500, &86400, &1000, &sub_id, &usd_string(&env));
 
     // Window: [1000, 2000]
     client.set_window(&sub_id, &1000u64, &2000u64);
@@ -1116,7 +1120,7 @@ fn test_renew_before_window_panics() {
 
     client.approve_renewal(&sub_id, &1, &1000, &100);
     client.acquire_renewal_lock(&sub_id, &200);
-    client.renew(&sub_id, &1, &500, &3, &10, &20260101u64, &true);
+    client.renew(&sub_id, &1, &500, &3, &10, &20260101u64, &true, &usd_string(&env));
 }
 
 /// I-W2: renew() panics when current timestamp is after billing_end.
@@ -1128,7 +1132,7 @@ fn test_renew_after_window_panics() {
     let user = Address::generate(&env);
     let sub_id = 904u64;
     let merchant = Address::generate(&env);
-    client.init_sub(&user, &merchant, &500, &86400, &1000, &sub_id);
+    client.init_sub(&user, &merchant, &500, &86400, &1000, &sub_id, &usd_string(&env));
 
     // Window: [1000, 2000]
     client.set_window(&sub_id, &1000u64, &2000u64);
@@ -1140,7 +1144,7 @@ fn test_renew_after_window_panics() {
 
     client.approve_renewal(&sub_id, &1, &1000, &100);
     client.acquire_renewal_lock(&sub_id, &200);
-    client.renew(&sub_id, &1, &500, &3, &10, &20260101u64, &true);
+    client.renew(&sub_id, &1, &500, &3, &10, &20260101u64, &true, &usd_string(&env));
 }
 
 /// I-W3: renew() succeeds with no time restriction when no window is set.
@@ -1151,7 +1155,7 @@ fn test_renew_without_window_has_no_time_restriction() {
     let user = Address::generate(&env);
     let sub_id = 905u64;
     let merchant = Address::generate(&env);
-    client.init_sub(&user, &merchant, &500, &86400, &1000, &sub_id);
+    client.init_sub(&user, &merchant, &500, &86400, &1000, &sub_id, &usd_string(&env));
 
     // No set_window call — window is optional
     env.ledger().with_mut(|li| {
@@ -1160,7 +1164,7 @@ fn test_renew_without_window_has_no_time_restriction() {
 
     client.approve_renewal(&sub_id, &1, &1000, &100);
     client.acquire_renewal_lock(&sub_id, &200);
-    let result = client.renew(&sub_id, &1, &500, &3, &10, &20260101u64, &true);
+    let result = client.renew(&sub_id, &1, &500, &3, &10, &20260101u64, &true, &usd_string(&env));
     assert!(result);
 }
 
@@ -1172,7 +1176,7 @@ fn test_set_window_owner_only() {
     let user = Address::generate(&env);
     let sub_id = 906u64;
     let merchant = Address::generate(&env);
-    client.init_sub(&user, &merchant, &500, &86400, &1000, &sub_id);
+    client.init_sub(&user, &merchant, &500, &86400, &1000, &sub_id, &usd_string(&env));
 
     // Owner sets window — should succeed
     client.set_window(&sub_id, &1000u64, &2000u64);
@@ -1192,7 +1196,7 @@ fn test_approval_consumed_before_window_check() {
     let user = Address::generate(&env);
     let sub_id = 907u64;
     let merchant = Address::generate(&env);
-    client.init_sub(&user, &merchant, &500, &86400, &1000, &sub_id);
+    client.init_sub(&user, &merchant, &500, &86400, &1000, &sub_id, &usd_string(&env));
 
     // Window: [1000, 2000]
     client.set_window(&sub_id, &1000u64, &2000u64);
@@ -1214,6 +1218,6 @@ fn test_approval_consumed_before_window_check() {
     // Renew with a fresh approval inside the window — should succeed
     client.approve_renewal(&sub_id, &2, &1000, &100);
     client.acquire_renewal_lock(&sub_id, &200);
-    let result2 = client.renew(&sub_id, &2, &500, &3, &10, &20260102u64, &true);
+    let result2 = client.renew(&sub_id, &2, &500, &3, &10, &20260102u64, &true, &usd_string(&env));
     assert!(result2);
 }

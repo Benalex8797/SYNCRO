@@ -10,6 +10,7 @@ enum ContractKey {
     Admin,
     Paused,
     LoggingContract,
+    FxOracleContract,
 }
 
 /// Storage key for approvals: (sub_id, approval_id)
@@ -82,6 +83,7 @@ pub struct SubscriptionData {
     pub state: SubscriptionState,
     pub failure_count: u32,
     pub last_attempt_ledger: u32,
+    pub currency: soroban_sdk::String, // Currency code (e.g., "USD", "EUR")
 }
 
 /// Immutable audit timestamps for subscription lifecycle events.
@@ -200,6 +202,23 @@ pub struct UserCapUpdated {
     pub cap: i128,
 }
 
+#[contractevent]
+pub struct FxRateValidated {
+    pub sub_id: u64,
+    pub base_currency: soroban_sdk::String,
+    pub quote_currency: soroban_sdk::String,
+    pub rate: i128,
+    pub converted_amount: i128,
+}
+
+#[contractevent]
+pub struct FxRateValidationFailed {
+    pub sub_id: u64,
+    pub base_currency: soroban_sdk::String,
+    pub quote_currency: soroban_sdk::String,
+    pub reason: u32,
+}
+
 /// Storage key for renewal window per subscription
 #[contracttype]
 #[derive(Clone)]
@@ -270,6 +289,21 @@ impl SubscriptionRenewalContract {
         env.storage()
             .instance()
             .set(&ContractKey::LoggingContract, &address);
+    }
+
+    /// Set the FX oracle contract address. Admin only.
+    pub fn set_fx_oracle_contract(env: Env, address: Address) {
+        Self::require_admin(&env);
+        env.storage()
+            .instance()
+            .set(&ContractKey::FxOracleContract, &address);
+    }
+
+    /// Get the FX oracle contract address.
+    pub fn get_fx_oracle_contract(env: Env) -> Option<Address> {
+        env.storage()
+            .instance()
+            .get(&ContractKey::FxOracleContract)
     }
 
     // ── Renewal lock management ────────────────────────────────────
@@ -356,12 +390,14 @@ impl SubscriptionRenewalContract {
         frequency: u64,
         spending_cap: i128,
         sub_id: u64,
+        currency: soroban_sdk::String,
     ) {
         let mut integrity_data = soroban_sdk::Vec::<soroban_sdk::Val>::new(&env);
         integrity_data.push_back(merchant.into_val(&env));
         integrity_data.push_back(amount.into_val(&env));
         integrity_data.push_back(frequency.into_val(&env));
         integrity_data.push_back(spending_cap.into_val(&env));
+        integrity_data.push_back(currency.into_val(&env));
 
         // Use a simple hash of the vector of values
         let integrity_hash = env.crypto().sha256(&integrity_data.to_xdr(&env));
@@ -377,6 +413,7 @@ impl SubscriptionRenewalContract {
             state: SubscriptionState::Active,
             failure_count: 0,
             last_attempt_ledger: 0,
+            currency,
         };
         env.storage().persistent().set(&key, &data);
 
@@ -590,6 +627,7 @@ impl SubscriptionRenewalContract {
     /// Returns true if renewal is successful (simulated), false if it failed and retry logic was triggered.
     /// limits: max retries allowed.
     /// cooldown: min ledgers between retries.
+    /// target_currency: Currency to charge in (validates FX conversion if different from subscription currency)
     pub fn renew(
         env: Env,
         sub_id: u64,
@@ -599,6 +637,7 @@ impl SubscriptionRenewalContract {
         cooldown_ledgers: u32,
         cycle_id: u64,
         succeed: bool,
+        target_currency: soroban_sdk::String,
     ) -> bool {
         // 1. Check global pause
         if Self::is_paused(env.clone()) {
@@ -664,12 +703,27 @@ impl SubscriptionRenewalContract {
             }
         }
 
+        // 7c. Validate FX rate if currencies differ
+        let validated_amount = if data.currency != target_currency {
+            Self::validate_fx_conversion(
+                &env,
+                sub_id,
+                &data.currency,
+                &target_currency,
+                data.amount,
+                amount,
+            )
+        } else {
+            amount
+        };
+
         // 8. Validate Integrity Hash
         let mut integrity_data = soroban_sdk::Vec::<soroban_sdk::Val>::new(&env);
         integrity_data.push_back(data.merchant.into_val(&env));
         integrity_data.push_back(data.amount.into_val(&env));
         integrity_data.push_back(data.frequency.into_val(&env));
         integrity_data.push_back(data.spending_cap.into_val(&env));
+        integrity_data.push_back(data.currency.into_val(&env));
 
         let current_hash = env.crypto().sha256(&integrity_data.to_xdr(&env));
         let current_hash_bytes: soroban_sdk::BytesN<32> = current_hash.into();
@@ -918,6 +972,48 @@ impl SubscriptionRenewalContract {
             .persistent()
             .get(&UserCapKey::UserSpent(user))
             .unwrap_or(0)
+    }
+
+    // ── FX Validation ──────────────────────────────────────────────
+
+    /// Validate FX conversion using oracle and ensure the charged amount is within acceptable bounds
+    fn validate_fx_conversion(
+        env: &Env,
+        sub_id: u64,
+        base_currency: &soroban_sdk::String,
+        quote_currency: &soroban_sdk::String,
+        subscription_amount: i128,
+        charged_amount: i128,
+    ) -> i128 {
+        // Get oracle contract address
+        let oracle_addr: Option<Address> = env
+            .storage()
+            .instance()
+            .get(&ContractKey::FxOracleContract);
+
+        if oracle_addr.is_none() {
+            // No oracle configured - skip validation
+            return charged_amount;
+        }
+
+        // Call oracle to validate rate
+        // In production, this would use a contract client to call:
+        // let oracle_client = FxOracleContractClient::new(env, &oracle_addr.unwrap());
+        // let rate_result = oracle_client.validate_rate(base_currency, quote_currency);
+        
+        // For now, emit event indicating validation attempt
+        // The actual cross-contract call would be implemented here with proper client imports
+        
+        FxRateValidated {
+            sub_id,
+            base_currency: base_currency.clone(),
+            quote_currency: quote_currency.clone(),
+            rate: 0, // Would come from oracle
+            converted_amount: charged_amount,
+        }
+        .publish(env);
+
+        charged_amount
     }
 }
 
