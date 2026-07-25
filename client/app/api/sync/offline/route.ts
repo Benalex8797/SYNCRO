@@ -62,6 +62,13 @@ export async function POST(request: NextRequest) {
     if (type === "update") {
       const id = payload.id as string
 
+      // Reject protected fields
+      const protectedFields = ["user_id", "created_at", "deleted_at", "status"]
+      const hasProtected = protectedFields.some(field => field in payload)
+      if (hasProtected) {
+        return NextResponse.json({ error: "Cannot update protected fields" }, { status: 400 })
+      }
+
       // Check for conflicts
       const { data: existing, error: fetchError } = await supabase
         .from("subscriptions")
@@ -88,11 +95,33 @@ export async function POST(request: NextRequest) {
           resolvedData: resolved,
         }, { status: 409 })
       }
+      
+      if (payload.version && payload.version > (existing.version || 0) + 1) {
+        // Tampering with version to forcefully overwrite
+        return NextResponse.json({ error: "Invalid version for update" }, { status: 400 })
+      }
+
+      // Explicit allowlist for updates
+      const allowedFields = [
+        "name", "category", "price", "icon", "renews_in",
+        "color", "renewal_url", "tags", "email_account_id",
+        "has_api_key", "is_trial", "trial_ends_at", "price_after_trial",
+        "source", "manually_edited", "edited_fields", "pricing_type",
+        "billing_cycle", "active_until", "paused_at", "resumes_at",
+        "price_range", "price_history"
+      ]
+
+      const safePayload: Record<string, any> = {}
+      for (const field of allowedFields) {
+        if (field in payload) {
+          safePayload[field] = payload[field]
+        }
+      }
 
       const { data, error } = await supabase
         .from("subscriptions")
         .update({
-          ...payload,
+          ...safePayload,
           version: (existing.version || 0) + 1,
         })
         .eq("id", id)
