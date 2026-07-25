@@ -75,6 +75,7 @@ pub enum EscrowError {
     NotInDispute = 16,
     SelfAsCounterparty = 17,
     SameArbiterAsParty = 18,
+    CounterOverflow = 19,
 }
 
 // ── Events ────────────────────────────────────────────────────────────────────
@@ -199,7 +200,9 @@ impl EscrowContract {
             .instance()
             .get(&DataKey::EscrowCount)
             .unwrap_or(0);
-        let escrow_id = count + 1;
+        let escrow_id = count
+            .checked_add(1)
+            .unwrap_or_else(|| panic_with_error!(&env, EscrowError::CounterOverflow));
 
         let now = env.ledger().timestamp();
         if expires_at <= now {
@@ -826,8 +829,50 @@ mod test {
         assert_eq!(agreement.state, EscrowState::Funded);
         assert!(!agreement.arbiter_approved);
     }
+
+    #[test]
+    fn test_escrow_id_uniqueness() {
+        let (env, payer, payee, arbiter, token, _token_client) = setup();
+        let escrow = register_escrow(&env);
+        let admin = Address::generate(&env);
+        escrow.init(&admin);
+
+        let expiry = env.ledger().timestamp() + 86400;
+        let desc = String::from_str(&env, "Test");
+
+        let id1 = escrow.create_escrow(&payer, &payee, &arbiter, &token, &1_000i128, &expiry, &desc);
+        let id2 = escrow.create_escrow(&payer, &payee, &arbiter, &token, &2_000i128, &expiry, &desc);
+        let id3 = escrow.create_escrow(&payer, &payee, &arbiter, &token, &3_000i128, &expiry, &desc);
+
+        assert_eq!(id1, 1);
+        assert_eq!(id2, 2);
+        assert_eq!(id3, 3);
+        assert_ne!(id1, id2);
+        assert_ne!(id2, id3);
+    }
+
+    #[test]
+    #[should_panic(expected = "HostError: Error(Contract, #19)")]
+    fn test_escrow_counter_overflow_guard() {
+        let (env, payer, payee, arbiter, token, _token_client) = setup();
+        let escrow = register_escrow(&env);
+        let admin = Address::generate(&env);
+        escrow.init(&admin);
+
+        let expiry = env.ledger().timestamp() + 86400;
+        let desc = String::from_str(&env, "Test");
+
+        let contract_id = env.register_contract(None, EscrowContract);
+        env.as_contract(&contract_id, || {
+            env.storage().instance().set(&DataKey::EscrowCount, &u64::MAX);
+        });
+
+        let client = EscrowContractClient::new(&env, &contract_id);
+        client.create_escrow(&payer, &payee, &arbiter, &token, &1_000i128, &expiry, &desc);
+    }
 }
 
 #[cfg(test)]
 mod fuzz;
+
 

@@ -357,6 +357,8 @@ impl SubscriptionRenewalContract {
         spending_cap: i128,
         sub_id: u64,
     ) {
+        owner.require_auth();
+
         let mut integrity_data = soroban_sdk::Vec::<soroban_sdk::Val>::new(&env);
         integrity_data.push_back(merchant.into_val(&env));
         integrity_data.push_back(amount.into_val(&env));
