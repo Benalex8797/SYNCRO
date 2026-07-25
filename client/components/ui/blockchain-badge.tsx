@@ -14,6 +14,7 @@
  */
 
 import React from "react";
+import { resolveExplorerUrl } from "../../../shared/blockchain-flags";
 
 export type BlockchainSyncStatus =
   | "synced"
@@ -31,19 +32,6 @@ interface BlockchainBadgeProps {
   /** Optional extra label text; defaults to a capitalised status name */
   label?: string;
   className?: string;
-}
-
-/**
- * Returns the StellarExpert (or Lab) URL for a given transaction hash.
- * Respects NEXT_PUBLIC_STELLAR_NETWORK env var (public | testnet).
- */
-function getExplorerUrl(hash: string): string {
-  const network = process.env.NEXT_PUBLIC_STELLAR_NETWORK ?? "public";
-  const base =
-    network === "testnet"
-      ? "https://stellar.expert/explorer/testnet/tx"
-      : "https://stellar.expert/explorer/public/tx";
-  return `${base}/${hash}`;
 }
 
 /**
@@ -112,7 +100,7 @@ export function BlockchainBadge({
   if (isClickable) {
     return (
       <a
-        href={getExplorerUrl(transactionHash!)}
+        href={resolveExplorerUrl(transactionHash!)}
         target="_blank"
         rel="noopener noreferrer"
         className="inline-flex hover:opacity-80 transition-opacity focus:outline-none focus-visible:ring-2 focus-visible:ring-[#FFD166] rounded-full"

@@ -15,6 +15,8 @@ import { validate } from '../middleware/validate';
 import { supabase } from '../config/database';
 import logger from '../config/logger';
 import { createTagSchema, notesSchema, addTagSchema } from '../schemas/tag';
+import { uuidParamSchema } from '../schemas/common';
+import { parseDbError } from '../utils/db-constraint-errors';
 
 const router: express.Router = express.Router();
 router.use(authenticate);
@@ -63,8 +65,9 @@ router.post('/', validate(createTagSchema), async (req: AuthenticatedRequest, re
       .single();
 
     if (error) {
-      if (error.code === '23505') {
-        return res.status(409).json({ success: false, error: 'A tag with that name already exists' });
+      const appError = parseDbError(error);
+      if (appError) {
+        return res.status(appError.status).json({ success: false, error: appError.message, field: appError.field });
       }
       throw error;
     }
@@ -80,7 +83,7 @@ router.post('/', validate(createTagSchema), async (req: AuthenticatedRequest, re
  * DELETE /api/tags/:id
  * Delete a tag and all its assignments (handled by ON DELETE CASCADE).
  */
-router.delete('/:id', async (req: AuthenticatedRequest, res: Response) => {
+router.delete('/:id', validate(uuidParamSchema, 'params'), async (req: AuthenticatedRequest, res: Response) => {
   try {
     const userId = req.user?.id;
     if (!userId) return res.status(401).json({ success: false, error: 'Unauthorized' });
@@ -143,10 +146,16 @@ router.post(
       }
 
       const { error } = await supabase
-        .from('subscription_tag_assignments')
-        .upsert({ subscription_id: subscriptionId, tag_id });
+        .from('subscription_tags')
+        .insert({ subscription_id: subscriptionId, tag_id });
 
-      if (error) throw error;
+      if (error) {
+        const appError = parseDbError(error);
+        if (appError) {
+          return res.status(appError.status).json({ success: false, error: appError.message, field: appError.field });
+        }
+        throw error;
+      }
 
       return res.status(200).json({ success: true, data: { assigned: true } });
     } catch (error) {
@@ -160,7 +169,7 @@ router.post(
  * DELETE /api/subscriptions/:id/tags/:tagId
  * Remove a tag from a subscription.
  */
-router.delete('/subscriptions/:id/tags/:tagId', async (req: AuthenticatedRequest, res: Response) => {
+router.delete('/subscriptions/:id/tags/:tagId', validate(uuidParamSchema, 'params'), async (req: AuthenticatedRequest, res: Response) => {
   try {
     const userId = req.user?.id;
     if (!userId) return res.status(401).json({ success: false, error: 'Unauthorized' });
@@ -179,12 +188,18 @@ router.delete('/subscriptions/:id/tags/:tagId', async (req: AuthenticatedRequest
     }
 
     const { error } = await supabase
-      .from('subscription_tag_assignments')
+      .from('subscription_tags')
       .delete()
       .eq('subscription_id', subscriptionId)
       .eq('tag_id', tagId);
 
-    if (error) throw error;
+    if (error) {
+      const appError = parseDbError(error);
+      if (appError) {
+        return res.status(appError.status).json({ success: false, error: appError.message, field: appError.field });
+      }
+      throw error;
+    }
 
     return res.status(200).json({ success: true, data: { removed: true } });
   } catch (error) {

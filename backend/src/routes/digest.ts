@@ -61,7 +61,8 @@ router.patch(
  * Send a test digest email (rate-limited to 1/hour)
  */
 router.post('/test', async (req: AuthenticatedRequest, res: Response) => {
-  const userId = req.user!.id;
+  try {
+    const userId = req.user!.id;
 
     const history = await digestEmailService.getAuditHistory(userId, 5);
     const oneHourAgo = Date.now() - 60 * 60 * 1000;
@@ -87,13 +88,6 @@ router.post('/test', async (req: AuthenticatedRequest, res: Response) => {
     logger.error('POST /digest/test error:', err);
     return res.status(500).json({ success: false, error: 'Failed to send test digest' });
   }
-
-  const outcome = await digestService.sendDigestForUser(userId, 'test');
-  if (!outcome.success) {
-    throw new BadRequestError(outcome.error || 'Failed to send test digest');
-  }
-
-  res.json({ success: true, message: 'Test digest sent successfully.' });
 });
 
 /**

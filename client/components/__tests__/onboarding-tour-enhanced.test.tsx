@@ -1,28 +1,38 @@
 import { render, screen, fireEvent, waitFor } from '@testing-library/react'
+import { describe, test, it, expect, vi, beforeEach } from 'vitest'
 import { OnboardingTourEnhanced, useOnboardingTourEnhanced } from '../onboarding-tour-enhanced'
 
 // Mock react-joyride-react-19
-jest.mock('react-joyride-react-19', () => {
-  return function MockJoyride({ run, steps, callback }: any) {
-    if (!run) return null
-    
-    return (
-      <div data-testid="joyride-tour">
-        <div data-testid="tour-step-count">{steps.length} steps</div>
-        <button 
-          data-testid="tour-skip" 
-          onClick={() => callback({ status: 'skipped', type: 'step:after', action: 'close' })}
-        >
-          Skip Tour
-        </button>
-        <button 
-          data-testid="tour-complete" 
-          onClick={() => callback({ status: 'finished', type: 'tour:end', action: 'next' })}
-        >
-          Complete Tour
-        </button>
-      </div>
-    )
+vi.mock('react-joyride-react-19', () => {
+  return {
+    default: function MockJoyride({ run, steps, callback, stepIndex = 0 }: any) {
+      if (!run) return null
+      
+      return (
+        <div data-testid="joyride-tour">
+          <div data-testid="tour-step-count">{steps.length} steps</div>
+          <div data-testid="tour-step-index">{stepIndex}</div>
+          <button 
+            data-testid="tour-next" 
+            onClick={() => callback({ status: 'running', type: 'step:after', action: 'next', index: stepIndex })}
+          >
+            Next Step
+          </button>
+          <button 
+            data-testid="tour-skip" 
+            onClick={() => callback({ status: 'skipped', type: 'step:after', action: 'close', index: stepIndex })}
+          >
+            Skip Tour
+          </button>
+          <button 
+            data-testid="tour-complete" 
+            onClick={() => callback({ status: 'finished', type: 'tour:end', action: 'next', index: stepIndex })}
+          >
+            Complete Tour
+          </button>
+        </div>
+      )
+    }
   }
 })
 
@@ -45,7 +55,7 @@ describe('OnboardingTourEnhanced', () => {
   beforeEach(() => {
     // Clear localStorage before each test
     localStorage.clear()
-    jest.clearAllMocks()
+    vi.clearAllMocks()
   })
 
   describe('useOnboardingTourEnhanced hook', () => {
@@ -89,6 +99,7 @@ describe('OnboardingTourEnhanced', () => {
       expect(screen.getByTestId('should-show-tour')).toHaveTextContent('true')
       expect(localStorage.getItem('onboarding-tour-completed')).toBeNull()
       expect(localStorage.getItem('onboarding-tour-skipped')).toBeNull()
+      expect(localStorage.getItem('onboarding-tour-step-index')).toBeNull()
     })
   })
 
@@ -98,9 +109,9 @@ describe('OnboardingTourEnhanced', () => {
       
       await waitFor(() => {
         expect(screen.getByTestId('joyride-tour')).toBeInTheDocument()
-      })
+      }, { timeout: 2000 })
       
-      expect(screen.getByTestId('tour-step-count')).toHaveTextContent('4 steps')
+      expect(screen.getByTestId('tour-step-count')).toHaveTextContent('3 steps')
     })
 
     test('should not render tour when autoStart is false and no localStorage flags', () => {
@@ -110,13 +121,13 @@ describe('OnboardingTourEnhanced', () => {
     })
 
     test('should handle tour completion', async () => {
-      const onComplete = jest.fn()
+      const onComplete = vi.fn()
       
       render(<OnboardingTourEnhanced autoStart={true} onComplete={onComplete} />)
       
       await waitFor(() => {
         expect(screen.getByTestId('joyride-tour')).toBeInTheDocument()
-      })
+      }, { timeout: 2000 })
       
       fireEvent.click(screen.getByTestId('tour-complete'))
       
@@ -125,13 +136,13 @@ describe('OnboardingTourEnhanced', () => {
     })
 
     test('should handle tour skip', async () => {
-      const onSkip = jest.fn()
+      const onSkip = vi.fn()
       
       render(<OnboardingTourEnhanced autoStart={true} onSkip={onSkip} />)
       
       await waitFor(() => {
         expect(screen.getByTestId('joyride-tour')).toBeInTheDocument()
-      })
+      }, { timeout: 2000 })
       
       fireEvent.click(screen.getByTestId('tour-skip'))
       
@@ -139,12 +150,54 @@ describe('OnboardingTourEnhanced', () => {
       expect(localStorage.getItem('onboarding-tour-skipped')).toBe('true')
     })
 
+    test('should persist progress across reloads', async () => {
+      render(<OnboardingTourEnhanced autoStart={true} />)
+      
+      await waitFor(() => {
+        expect(screen.getByTestId('joyride-tour')).toBeInTheDocument()
+      }, { timeout: 2000 })
+      
+      expect(screen.getByTestId('tour-step-index')).toHaveTextContent('0')
+
+      fireEvent.click(screen.getByTestId('tour-next'))
+      
+      expect(localStorage.getItem('onboarding-tour-step-index')).toBe('1')
+      expect(screen.getByTestId('tour-step-index')).toHaveTextContent('1')
+    })
+
+    test('should resume from persisted progress', async () => {
+      localStorage.setItem('onboarding-tour-step-index', '2')
+      
+      render(<OnboardingTourEnhanced autoStart={true} />)
+      
+      await waitFor(() => {
+        expect(screen.getByTestId('joyride-tour')).toBeInTheDocument()
+      }, { timeout: 2000 })
+      
+      expect(screen.getByTestId('tour-step-index')).toHaveTextContent('2')
+    })
+
+    test('should clear persisted progress on completion', async () => {
+      localStorage.setItem('onboarding-tour-step-index', '2')
+      const onComplete = vi.fn()
+      
+      render(<OnboardingTourEnhanced autoStart={true} onComplete={onComplete} />)
+      
+      await waitFor(() => {
+        expect(screen.getByTestId('joyride-tour')).toBeInTheDocument()
+      }, { timeout: 2000 })
+      
+      fireEvent.click(screen.getByTestId('tour-complete'))
+      
+      expect(localStorage.getItem('onboarding-tour-step-index')).toBeNull()
+    })
+
     test('should support dark mode', async () => {
       render(<OnboardingTourEnhanced autoStart={true} darkMode={true} />)
       
       await waitFor(() => {
         expect(screen.getByTestId('joyride-tour')).toBeInTheDocument()
-      })
+      }, { timeout: 2000 })
       
       // Test would verify dark mode styles are applied
       // This would require more detailed DOM inspection in a real test

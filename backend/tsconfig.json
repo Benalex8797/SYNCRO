@@ -15,17 +15,17 @@
     "declaration": true,
     "declarationMap": true,
     "sourceMap": true,
+    "isolatedModules": true,
     "types": [
       "node",
       "jest"
     ]
   },
-  "include": [ "src/**/*", "services/subscription-classifier.js", "tests/logger.test.ts", "tests/quiet-hours-service.test.ts"],
+  "include": [ "src/**/*", "tests/**/*.ts"],
   "exclude": [
     "node_modules",
     "dist",
     "src/services/blockchain-service-impl-example.ts",
-    "tests",
     "src/rate-limit/**/*"
   ]
 }

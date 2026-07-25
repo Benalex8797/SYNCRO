@@ -2,7 +2,7 @@
 
 import { useState, useEffect, useCallback } from "react"
 import Joyride, { CallBackProps, STATUS, EVENTS, ACTIONS } from "react-joyride-react-19"
-import { Plus, Mail, Wallet, Sparkles } from "lucide-react"
+import { Plus, Mail, Wallet } from "lucide-react"
 
 interface OnboardingTourEnhancedProps {
   onComplete?: () => void
@@ -128,7 +128,7 @@ const TOUR_STEPS = [
         </div>
         <div className="p-3 bg-green-50 dark:bg-green-900/20 rounded-lg border border-green-200 dark:border-green-800">
           <p className="text-xs text-green-800 dark:text-green-200">
-            <strong>🎉 Setup Complete!</strong> You're ready to manage your subscriptions.
+            <strong>🎉 Setup Complete!</strong> You&apos;re ready to manage your subscriptions.
           </p>
         </div>
         <div className="flex items-center gap-2 text-sm text-gray-600 dark:text-gray-400">
@@ -149,11 +149,18 @@ export function OnboardingTourEnhanced({
   autoStart = true,
 }: OnboardingTourEnhancedProps) {
   const [run, setRun] = useState(false)
+  const [stepIndex, setStepIndex] = useState(0)
 
   useEffect(() => {
     // Check if user has completed tour
     const tourCompleted = localStorage.getItem("onboarding-tour-completed")
     const tourSkipped = localStorage.getItem("onboarding-tour-skipped")
+    
+    // Resume from saved step if partially completed
+    const savedStep = localStorage.getItem("onboarding-tour-step-index")
+    if (savedStep) {
+      setStepIndex(parseInt(savedStep, 10))
+    }
     
     if (!tourCompleted && !tourSkipped && autoStart) {
       // Small delay to ensure DOM elements are rendered
@@ -165,17 +172,31 @@ export function OnboardingTourEnhanced({
     }
   }, [autoStart])
 
+  const trackEvent = (eventName: string, data?: any) => {
+    // Basic analytics tracking via console to simulate analytics capture
+    console.log(`[Analytics] ${eventName}`, data)
+  }
+
   const handleJoyrideCallback = useCallback((data: CallBackProps) => {
-    const { status, type, action } = data
+    const { status, type, action, index } = data
+
+    if (type === EVENTS.STEP_AFTER || type === EVENTS.TARGET_NOT_FOUND) {
+      const nextIndex = index + (action === ACTIONS.PREV ? -1 : 1);
+      setStepIndex(nextIndex)
+      localStorage.setItem("onboarding-tour-step-index", String(nextIndex))
+    }
 
     if (([STATUS.FINISHED, STATUS.SKIPPED] as string[]).includes(status)) {
       setRun(false)
       
       if (status === STATUS.FINISHED) {
         localStorage.setItem("onboarding-tour-completed", "true")
+        localStorage.removeItem("onboarding-tour-step-index")
+        trackEvent("Tour Completed")
         onComplete?.()
       } else if (status === STATUS.SKIPPED) {
         localStorage.setItem("onboarding-tour-skipped", "true")
+        trackEvent("Tour Skipped", { step: index })
         onSkip?.()
       }
     }
@@ -184,6 +205,7 @@ export function OnboardingTourEnhanced({
     if (type === EVENTS.STEP_AFTER && action === ACTIONS.CLOSE) {
       setRun(false)
       localStorage.setItem("onboarding-tour-skipped", "true")
+      trackEvent("Tour Skipped", { step: index, action: "close" })
       onSkip?.()
     }
   }, [onComplete, onSkip])
@@ -192,6 +214,7 @@ export function OnboardingTourEnhanced({
 
   return (
     <Joyride
+      stepIndex={stepIndex}
       steps={TOUR_STEPS}
       run={run}
       continuous
@@ -304,12 +327,14 @@ export function useOnboardingTourEnhanced() {
   const resetTour = useCallback(() => {
     localStorage.removeItem("onboarding-tour-completed")
     localStorage.removeItem("onboarding-tour-skipped")
+    localStorage.removeItem("onboarding-tour-step-index")
     setTourCompleted(false)
     setTourSkipped(false)
   }, [])
 
   const completeTour = useCallback(() => {
     localStorage.setItem("onboarding-tour-completed", "true")
+    localStorage.removeItem("onboarding-tour-step-index")
     setTourCompleted(true)
   }, [])
 

@@ -4,6 +4,7 @@ import { authenticate, AuthenticatedRequest } from '../middleware/auth';
 import { validate } from '../middleware/validate';
 import logger from '../config/logger';
 import { pushSubscribeSchema } from '../schemas/push-notification';
+import { enqueueNotification } from '../jobs/notification-queue';
 
 const router: Router = Router();
 
@@ -31,10 +32,23 @@ router.post('/subscribe', validate(pushSubscribeSchema), async (req: Authenticat
 
     const { endpoint, keys, userAgent } = req.body;
 
-  res.status(201).json({
-    success: true,
-    data: { id: data.id, endpoint: data.endpoint, createdAt: data.created_at },
-  });
+    const { data, error } = await supabase.from('push_subscriptions').insert({
+      user_id: userId,
+      endpoint,
+      keys,
+      user_agent: userAgent,
+    }).select().single();
+
+    if (error) throw error;
+
+    res.status(201).json({
+      success: true,
+      data: { id: data.id, endpoint: data.endpoint, createdAt: data.created_at },
+    });
+  } catch (error) {
+    logger.error('Push subscription error:', error);
+    res.status(500).json({ success: false, error: 'Failed to subscribe to push notifications' });
+  }
 });
 
 /**

@@ -4,6 +4,8 @@ import { validate } from '../middleware/validate';
 import logger from '../config/logger';
 import { adminAuth } from '../middleware/admin';
 import { createMerchantSchema, updateMerchantSchema, merchantQuerySchema } from '../schemas/merchant';
+import { validateRequest } from '../utils/validation';
+import { PaginationError } from '../utils/pagination';
 
 const router: Router = Router();
 
@@ -29,7 +31,15 @@ router.get(
         data: result.merchants,
         pagination: { total: result.total, limit, offset },
       });
-    } catch (error) {
+    } catch (error: any) {
+      if (error.name === 'PaginationError') {
+        res.status(400).json({
+          success: false,
+          error: error.message,
+          code: error.code,
+        });
+        return;
+      }
       logger.error('List merchants error:', error);
       res.status(500).json({
         success: false,

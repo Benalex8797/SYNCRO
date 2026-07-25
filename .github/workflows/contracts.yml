@@ -26,7 +26,7 @@ jobs:
                 working-directory: contracts
 
         steps:
-            - uses: actions/checkout@v4
+            - uses: actions/checkout@v7
 
             - name: Install Rust
               uses: dtolnay/rust-toolchain@stable
@@ -41,8 +41,34 @@ jobs:
             - name: Build contracts
               run: cargo build --target wasm32-unknown-unknown --release
 
+            - name: Check snapshot layout (no flat snapshots outside test/ subdir)
+              shell: bash
+              run: |
+                  set -euo pipefail
+                  # Snapshots must live under {contract}/test_snapshots/test/
+                  # Flat JSON files directly in test_snapshots/ indicate a misconfigured Env path
+                  flat=$(find contracts -maxdepth 2 -name "test_snapshots" -type d \
+                    | xargs -I{} find {} -maxdepth 1 -name "*.json" 2>/dev/null || true)
+                  if [ -n "$flat" ]; then
+                    echo "ERROR: snapshot files found directly in test_snapshots/ (missing test/ subdir):"
+                    echo "$flat"
+                    exit 1
+                  fi
+                  echo "Snapshot layout OK"
+
             - name: Run contract tests
               run: cargo test
+
+            - name: Run contract fuzz tests
+              run: cargo test -p subscription_renewal -p escrow -p payment-channel fuzz_
+              env:
+                  PROPTEST_CASES: "8"
+
+            - name: Verify backend contract interface alignment
+              working-directory: ..
+              run: |
+                npm ci --legacy-peer-deps --ignore-scripts --workspace=@syncro/backend --workspace=@syncro/shared 2>/dev/null || npm install --legacy-peer-deps --ignore-scripts --workspace=@syncro/backend --workspace=@syncro/shared
+                npm test -w @syncro/backend -- tests/integration/contract-interface-drift.test.ts
 
             - name: Check contract sizes
               shell: bash

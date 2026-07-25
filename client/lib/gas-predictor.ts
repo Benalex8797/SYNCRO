@@ -14,6 +14,8 @@
  *   if (estimate.congestion === 'high') { …warn user… }
  */
 
+import { RpcClient } from '../../shared/src/rpc-client';
+
 export type CongestionLevel = "low" | "medium" | "high" | "severe";
 
 export interface FeeStats {
@@ -99,6 +101,17 @@ class GasPredictorService {
   private cache: { stats: FeeStats; fetchedAt: number } | null = null;
   private readonly CACHE_TTL_MS = 15_000; // 15 seconds
   private thresholdXlm = 0.5; // default alert threshold
+  private rpcClient: RpcClient;
+
+  constructor() {
+    this.rpcClient = new RpcClient({
+      maxRetries: 3,
+      baseRetryDelayMs: 500,
+      timeoutMs: 10000,
+      circuitBreakerThreshold: 3,
+      circuitBreakerResetTimeoutMs: 15000,
+    });
+  }
 
   /** Set the alert threshold in XLM. */
   setThreshold(xlm: number): void {
@@ -110,7 +123,18 @@ class GasPredictorService {
   }
 
   private getRpcUrl(): string {
-    const network = process.env.NEXT_PUBLIC_STELLAR_NETWORK ?? "testnet";
+    const network = process.env.NEXT_PUBLIC_STELLAR_NETWORK ?? '';
+    const isProduction = process.env.NODE_ENV === 'production';
+
+    // In production, NEXT_PUBLIC_SOROBAN_RPC_URL must be explicitly set.
+    // We never silently fall back to the testnet RPC in a production build.
+    if (isProduction && !process.env.NEXT_PUBLIC_SOROBAN_RPC_URL) {
+      throw new Error(
+        '[gas-predictor] NEXT_PUBLIC_SOROBAN_RPC_URL must be set in production. ' +
+          'Refusing to fall back to the testnet RPC endpoint.',
+      );
+    }
+
     return (
       process.env.NEXT_PUBLIC_SOROBAN_RPC_URL ??
       RPC_ENDPOINTS[network] ??
@@ -130,7 +154,7 @@ class GasPredictorService {
 
     const rpcUrl = this.getRpcUrl();
 
-    const response = await fetch(rpcUrl, {
+    const response = await this.rpcClient.fetch(rpcUrl, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({

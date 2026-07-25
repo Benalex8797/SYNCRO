@@ -1,7 +1,7 @@
 "use client"
 
 import { useState, useEffect, useRef } from "react"
-import { Edit2, Trash2, Mail, Clock, Copy, Lock, Users, Calendar, Check, Download, FileText, Upload, PauseCircle, PlayCircle, AlertTriangle, ShieldAlert, AlertCircle } from "lucide-react"
+import { Edit2, Trash2, Mail, Clock, Copy, Lock, LockOpen, Users, Calendar, Check, Download, FileText, Upload, PauseCircle, PlayCircle, ShieldAlert, AlertCircle } from "lucide-react"
 import { exportAllCSV, exportActiveCSV, exportDateRangeCSV } from "@/lib/csv-export"
 import { downloadSubscriptionPDF } from "@/lib/pdf-report"
 import CSVImportModal from "@/components/modals/csv-import-modal"
@@ -15,25 +15,42 @@ import { fetchAllCancellationGuides, type CancellationGuide } from "@/lib/supaba
 import { StatusBadge, normalizeStatus } from "@/components/ui/status-badge"
 import { AdvancedFilterBar, type FilterState, EMPTY_FILTERS, hasActiveFilters } from "@/components/ui/advanced-filter-bar"
 import { KeyboardHelpModal } from "@/components/modals/keyboard-help-modal"
+import { useUserSettings } from "@/components/providers/user-settings-provider"
+import { formatCurrency } from "@/lib/currency-utils"
+import { formatDate, getDaysDifference } from "@/lib/timezone-utils"
+import { fetchCalendarToken as getCalendarToken, downloadCalendarExport, getCalendarFeedUrl, updateCalendarPreferences } from "@/lib/api/calendar"
+import { SortableSubscriptionList } from "@/components/subscriptions/sortable-subscription-list"
+import {
+  PriorityBadge,
+  SortableDragHandle,
+  SortableItemShell,
+} from "@/components/subscriptions/subscription-priority-ui"
+import { useSubscriptionPriorityOrder } from "@/hooks/use-subscription-priority-order"
+import {
+  getGlobalPriorityRank,
+  sortByPriorityOrder,
+  type PriorityRank,
+} from "@/lib/subscription-priority-order"
+import type { CSSProperties, ReactNode } from "react"
 
 interface SubscriptionsPageProps {
   subscriptions?: any[]
-  onDelete: (id: number) => void
+  onDelete: (id: string) => void
   maxSubscriptions: number
   currentPlan: string
   darkMode?: boolean
   onManage: (subscription: any) => void
   onRenew: (subscription: any) => void
-  selectedSubscriptions: Set<number>
-  onToggleSelect: (id: number) => void
+  selectedSubscriptions: Set<string>
+  onToggleSelect: (id: string) => void
   emailAccounts?: any[]
   duplicates?: any[]
   unusedSubscriptions?: any[]
   onImportComplete?: () => void
   onPause?: (subscription: any) => void
   onResume?: (subscription: any) => void
-  onCancelTrial?: (id: number) => void
-  onConvertTrial?: (id: number) => void
+  onCancelTrial?: (id: string) => void
+  onConvertTrial?: (id: string) => void
 }
 
 export default function SubscriptionsPage({
@@ -55,12 +72,14 @@ export default function SubscriptionsPage({
   onCancelTrial,
   onConvertTrial,
 }: SubscriptionsPageProps) {
+  const { settings } = useUserSettings()
+  const currency = settings.currency
   const [searchTerm, setSearchTerm] = useState("")
   const debouncedSearchTerm = useDebounce(searchTerm, 300)
   const [isSearching, setIsSearching] = useState(false)
   const [advancedFilters, setAdvancedFilters] = useState<FilterState>(EMPTY_FILTERS)
   const [filterEmail, setFilterEmail] = useState("all")
-  const [sortBy, setSortBy] = useState("name")
+  const [sortBy, setSortBy] = useState("priority")
   const [showKeyboardHelp, setShowKeyboardHelp] = useState(false)
   const [showDuplicatesOnly, setShowDuplicatesOnly] = useState(false)
   const [showUnusedOnly, setShowUnusedOnly] = useState(false)
@@ -97,7 +116,7 @@ export default function SubscriptionsPage({
     setShowExportMenu(false)
     setExportingPDF(true)
     try {
-      await downloadSubscriptionPDF(filtered)
+      await downloadSubscriptionPDF(displayed)
     } finally {
       setExportingPDF(false)
     }
@@ -119,8 +138,9 @@ export default function SubscriptionsPage({
   }, [])
 
   const [calendarToken, setCalendarToken] = useState<string | null>(null)
-  const [calendarUserId, setCalendarUserId] = useState<string | null>(null)
+  const [calendarFeedUrl, setCalendarFeedUrl] = useState<string | null>(null)
   const [showCalendarModal, setShowCalendarModal] = useState(false)
+  const [exportingCalendar, setExportingCalendar] = useState(false)
   const [copied, setCopied] = useState(false)
 
   const emailAccountsList = ["all", ...new Set((subscriptions || []).map((s: any) => s.email).filter(Boolean))]
@@ -137,15 +157,26 @@ export default function SubscriptionsPage({
 
   const fetchCalendarToken = async () => {
     try {
-      const response = await fetch("/api/calendar/token")
-      const data = await response.json()
-      if (data.success) {
-        setCalendarToken(data.token)
-        setCalendarUserId(data.userId)
-        setShowCalendarModal(true)
-      }
+      await updateCalendarPreferences({ calendar_sync_enabled: true })
+      const data = await getCalendarToken()
+      setCalendarToken(data.token)
+      setCalendarFeedUrl(data.feedUrl || getCalendarFeedUrl(data.userId, data.token))
+      setShowCalendarModal(true)
     } catch (error) {
       console.error("Failed to fetch calendar token", error)
+    }
+  }
+
+  const handleExportCalendar = async () => {
+    setExportingCalendar(true)
+    try {
+      await updateCalendarPreferences({ calendar_sync_enabled: true })
+      await downloadCalendarExport()
+      setShowExportMenu(false)
+    } catch (error) {
+      console.error("Failed to export calendar reminders", error)
+    } finally {
+      setExportingCalendar(false)
     }
   }
 
@@ -154,6 +185,14 @@ export default function SubscriptionsPage({
     setCopied(true)
     setTimeout(() => setCopied(false), 2000)
   }
+
+  const subscriptionIds = (subscriptions || []).map((sub: any) => sub.id)
+  const {
+    priorityOrder,
+    isLoading: priorityOrderLoading,
+    isSaving: priorityOrderSaving,
+    reorder: reorderPriority,
+  } = useSubscriptionPriorityOrder({ subscriptionIds })
 
   const filtered = (subscriptions || []).filter((sub: any) => {
     const matchesSearch = sub.name.toLowerCase().includes(debouncedSearchTerm.toLowerCase())
@@ -179,20 +218,23 @@ export default function SubscriptionsPage({
     return matchesSearch && matchesCategory && matchesStatus && matchesEmail && matchesPrice
   })
 
-  if (sortBy === "price-high") {
-    filtered.sort((a, b) => b.price - a.price)
+  let displayed = filtered
+  if (sortBy === "priority") {
+    displayed = sortByPriorityOrder(filtered, priorityOrder)
+  } else if (sortBy === "price-high") {
+    displayed = [...filtered].sort((a, b) => b.price - a.price)
   } else if (sortBy === "price-low") {
-    filtered.sort((a, b) => a.price - b.price)
+    displayed = [...filtered].sort((a, b) => a.price - b.price)
   } else if (sortBy === "renewal") {
-    filtered.sort((a, b) => a.renewsIn - b.renewsIn)
+    displayed = [...filtered].sort((a, b) => a.renewsIn - b.renewsIn)
   } else {
-    filtered.sort((a, b) => a.name.localeCompare(b.name))
+    displayed = [...filtered].sort((a, b) => a.name.localeCompare(b.name))
   }
 
-  const totalCost = filtered.reduce((sum: number, sub: any) => sum + sub.price, 0)
+  const totalCost = displayed.reduce((sum: number, sub: any) => sum + sub.price, 0)
 
   const hasNoSubscriptions = !subscriptions || subscriptions.length === 0
-  const hasNoResults = filtered.length === 0 && subscriptions && subscriptions.length > 0
+  const hasNoResults = displayed.length === 0 && subscriptions && subscriptions.length > 0
 
   // Active trials sorted by urgency (soonest expiry first)
   const activeTrials = (subscriptions || [])
@@ -214,7 +256,40 @@ export default function SubscriptionsPage({
     )
   }
 
-  const shouldVirtualize = filtered.length > 100
+  const shouldVirtualize = displayed.length > 100 && sortBy !== "priority"
+  const isPrioritySort = sortBy === "priority"
+  const filteredIds = displayed.map((sub: any) => sub.id)
+
+  const renderSubscriptionCard = (sub: any, options?: { priorityRank?: PriorityRank; dragHandle?: ReactNode; shellStyle?: CSSProperties; shellRef?: (node: HTMLElement | null) => void; isDragging?: boolean }) => (
+    <ErrorBoundary
+      fallback={<BrokenCardPlaceholder name={sub?.name} darkMode={darkMode} />}
+    >
+      <div
+        ref={options?.shellRef}
+        style={options?.shellStyle}
+        className={`transition-shadow duration-200 ${options?.isDragging ? "shadow-xl ring-2 ring-[#FFD166]/40 rounded-xl" : ""}`}
+      >
+        <SubscriptionCard
+          subscription={sub}
+          onDelete={onDelete}
+          onManage={onManage}
+          selectedSubscriptions={selectedSubscriptions}
+          onToggleSelect={onToggleSelect}
+          darkMode={darkMode}
+          isDuplicate={duplicates.some((dup: any) => dup.subscriptions.some((s: any) => s.id === sub.id))}
+          unusedInfo={unusedSubscriptions.find((unused: any) => unused.id === sub.id)}
+          onCancel={(s) => setSelectedSubForCancel(s)}
+          guide={guides.find((g) => g.service_name.toLowerCase() === sub.name.toLowerCase())}
+          onPause={onPause}
+          onResume={onResume}
+          onCancelTrial={onCancelTrial}
+          onConvertTrial={onConvertTrial}
+          priorityRank={options?.priorityRank}
+          dragHandle={options?.dragHandle}
+        />
+      </div>
+    </ErrorBoundary>
+  )
 
   return (
     <div>
@@ -326,7 +401,7 @@ export default function SubscriptionsPage({
                 CSV
               </p>
               <button
-                onClick={() => { exportAllCSV(filtered); setShowExportMenu(false) }}
+                onClick={() => { exportAllCSV(displayed); setShowExportMenu(false) }}
                 className={`w-full flex items-center gap-2 px-3 py-2 text-sm text-left transition-colors ${
                   darkMode ? "text-gray-300 hover:bg-[#374151]" : "text-gray-700 hover:bg-gray-50"
                 }`}
@@ -356,6 +431,22 @@ export default function SubscriptionsPage({
               >
                 <Download className="w-3.5 h-3.5" />
                 Renewals this year
+              </button>
+
+              <hr className={`my-1 ${darkMode ? "border-[#374151]" : "border-gray-100"}`} />
+
+              <p className={`px-3 pt-1 pb-1 text-xs font-semibold uppercase tracking-wide ${darkMode ? "text-gray-500" : "text-gray-400"}`}>
+                Calendar
+              </p>
+              <button
+                onClick={handleExportCalendar}
+                disabled={exportingCalendar}
+                className={`w-full flex items-center gap-2 px-3 py-2 text-sm text-left transition-colors ${
+                  darkMode ? "text-gray-300 hover:bg-[#374151]" : "text-gray-700 hover:bg-gray-50"
+                }`}
+              >
+                <Calendar className="w-3.5 h-3.5" />
+                {exportingCalendar ? "Exporting…" : "Export reminders (.ics)"}
               </button>
 
               <hr className={`my-1 ${darkMode ? "border-[#374151]" : "border-gray-100"}`} />
@@ -439,6 +530,7 @@ export default function SubscriptionsPage({
               : "bg-white border-gray-300 text-gray-900 focus:ring-black"
           }`}
         >
+          <option value="priority">Personal Priority</option>
           <option value="name">Sort by Name</option>
           <option value="price-high">Price: High to Low</option>
           <option value="price-low">Price: Low to High</option>
@@ -456,11 +548,20 @@ export default function SubscriptionsPage({
         />
       </div>
 
+      {isPrioritySort && !hasNoResults && (
+        <p className={`mb-3 text-sm ${darkMode ? "text-gray-400" : "text-gray-600"}`}>
+          Drag cards to set your personal priority. Top 3 subscriptions are highlighted.
+          {priorityOrderSaving ? " Saving order…" : null}
+        </p>
+      )}
+
       {/* Live region for search result count */}
       <div role="status" aria-live="polite" aria-atomic="true" className="sr-only">
         {!isSearching && debouncedSearchTerm
-          ? `Showing ${filtered.length} of ${subscriptions.length} subscriptions`
-          : ""}
+          ? `Showing ${displayed.length} of ${subscriptions.length} subscriptions`
+          : isPrioritySort && priorityOrderSaving
+            ? "Saving subscription priority order"
+            : ""}
       </div>
 
       {/* Active Trials Section */}
@@ -473,7 +574,7 @@ export default function SubscriptionsPage({
           </h3>
           <div className="space-y-3">
             {activeTrials.map((sub: any) => {
-              const daysLeft = Math.ceil((new Date(sub.trialEndsAt).getTime() - Date.now()) / (1000 * 60 * 60 * 24))
+              const daysLeft = getDaysDifference(sub.trialEndsAt)
               const urgencyColor = daysLeft <= 1 ? "text-red-600" : daysLeft <= 3 ? "text-orange-500" : "text-yellow-600"
               const urgencyBg = daysLeft <= 1 ? (darkMode ? "bg-red-900/20 border-red-700" : "bg-red-50 border-red-200") : daysLeft <= 3 ? (darkMode ? "bg-orange-900/20 border-orange-700" : "bg-orange-50 border-orange-200") : (darkMode ? "bg-yellow-900/20 border-yellow-700" : "bg-yellow-50 border-yellow-200")
               return (
@@ -521,56 +622,42 @@ export default function SubscriptionsPage({
         <>
           {shouldVirtualize ? (
             <VirtualizedList
-              items={filtered}
+              items={displayed}
               itemHeight={80}
               containerHeight={600}
-              renderItem={(sub: any, index: number) => (
-                <ErrorBoundary 
-                  fallback={<BrokenCardPlaceholder name={sub?.name} darkMode={darkMode} />}
-                >
-                  <SubscriptionCard
-                    key={sub.id}
-                    subscription={sub}
-                    onDelete={onDelete}
-                    onManage={onManage}
-                    selectedSubscriptions={selectedSubscriptions}
-                    onToggleSelect={onToggleSelect}
-                    darkMode={darkMode}
-                    isDuplicate={duplicates.some((dup: any) => dup.subscriptions.some((s: any) => s.id === sub.id))}
-                    unusedInfo={unusedSubscriptions.find((unused: any) => unused.id === sub.id)}
-                    onPause={onPause}
-                    onResume={onResume}
-                    onCancelTrial={onCancelTrial}
-                    onConvertTrial={onConvertTrial}
-                  />
-                </ErrorBoundary>
+              renderItem={(sub: any) => renderSubscriptionCard(sub)}
+            />
+          ) : isPrioritySort && !priorityOrderLoading ? (
+            <SortableSubscriptionList
+              items={displayed}
+              darkMode={darkMode}
+              onReorder={(fromIndex, toIndex) =>
+                reorderPriority(fromIndex, toIndex, filteredIds)
+              }
+              renderItem={(sub: any) => (
+                <SortableItemShell id={sub.id}>
+                  {({ setNodeRef, style, isDragging, attributes, listeners }) =>
+                    renderSubscriptionCard(sub, {
+                      priorityRank: getGlobalPriorityRank(sub.id, priorityOrder),
+                      dragHandle: (
+                        <SortableDragHandle
+                          attributes={attributes}
+                          listeners={listeners}
+                          darkMode={darkMode}
+                          label={`Drag to reorder ${sub.name}`}
+                        />
+                      ),
+                      shellRef: setNodeRef,
+                      shellStyle: style,
+                      isDragging,
+                    })
+                  }
+                </SortableItemShell>
               )}
             />
           ) : (
             <div className="space-y-3">
-              {filtered.map((sub: any) => (
-                <ErrorBoundary 
-                  key={sub.id}
-                  fallback={<BrokenCardPlaceholder name={sub?.name} darkMode={darkMode} />}
-                >
-                  <SubscriptionCard
-                    subscription={sub}
-                    onDelete={onDelete}
-                    onManage={onManage}
-                    selectedSubscriptions={selectedSubscriptions}
-                    onToggleSelect={onToggleSelect}
-                    darkMode={darkMode}
-                    isDuplicate={duplicates.some((dup: any) => dup.subscriptions.some((s: any) => s.id === sub.id))}
-                    unusedInfo={unusedSubscriptions.find((unused: any) => unused.id === sub.id)}
-                    onCancel={(s) => setSelectedSubForCancel(s)}
-                    guide={guides.find((g) => g.service_name.toLowerCase() === sub.name.toLowerCase())}
-                    onPause={onPause}
-                    onResume={onResume}
-                    onCancelTrial={onCancelTrial}
-                    onConvertTrial={onConvertTrial}
-                  />
-                </ErrorBoundary>
-              ))}
+              {displayed.map((sub: any) => renderSubscriptionCard(sub))}
             </div>
           )}
         </>
@@ -645,7 +732,7 @@ export default function SubscriptionsPage({
           darkMode={darkMode}
         />
       )}
-      {showCalendarModal && calendarToken && (
+      {showCalendarModal && calendarToken && calendarFeedUrl && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50 backdrop-blur-sm">
           <div
             className={`${darkMode ? "bg-[#1E2A35] text-white" : "bg-white text-gray-900"} rounded-2xl p-8 max-w-md w-full shadow-2xl animate-in fade-in zoom-in duration-200`}
@@ -663,17 +750,13 @@ export default function SubscriptionsPage({
             <div className="relative mb-8">
               <input
                 readOnly
-                value={`${window.location.protocol}//${window.location.host}/api/calendar/feed/${calendarUserId}/${calendarToken}.ics`}
+                value={calendarFeedUrl}
                 className={`w-full pr-12 pl-4 py-3 rounded-xl border text-sm ${
                   darkMode ? "bg-[#2D3748] border-[#374151] text-gray-300" : "bg-gray-50 border-gray-200 text-gray-600"
                 }`}
               />
               <button
-                onClick={() =>
-                  copyToClipboard(
-                    `${window.location.protocol}//${window.location.host}/api/calendar/feed/${calendarUserId}/${calendarToken}.ics`,
-                  )
-                }
+                onClick={() => copyToClipboard(calendarFeedUrl)}
                 className="absolute right-2 top-1/2 -translate-y-1/2 p-2 hover:bg-black/5 rounded-lg transition-colors"
               >
                 {copied ? <Check className="w-5 h-5 text-green-500" /> : <Copy className="w-5 h-5 text-gray-400" />}
@@ -694,10 +777,10 @@ export default function SubscriptionsPage({
 
 interface SubscriptionCardProps {
   subscription: any
-  onDelete: (id: number) => void
+  onDelete: (id: string) => void
   onManage?: (subscription: any) => void
-  selectedSubscriptions: Set<number>
-  onToggleSelect: (id: number) => void
+  selectedSubscriptions: Set<string>
+  onToggleSelect: (id: string) => void
   darkMode?: boolean
   isDuplicate?: boolean
   unusedInfo?: any
@@ -705,8 +788,10 @@ interface SubscriptionCardProps {
   guide?: CancellationGuide
   onPause?: (subscription: any) => void
   onResume?: (subscription: any) => void
-  onCancelTrial?: (id: number) => void
-  onConvertTrial?: (id: number) => void
+  onCancelTrial?: (id: string) => void
+  onConvertTrial?: (id: string) => void
+  priorityRank?: PriorityRank
+  dragHandle?: ReactNode
 }
 
 export function SubscriptionCard({
@@ -724,7 +809,11 @@ export function SubscriptionCard({
   onResume,
   onCancelTrial,
   onConvertTrial,
+  priorityRank,
+  dragHandle,
 }: SubscriptionCardProps) {
+  const { settings } = useUserSettings()
+  const currency = settings.currency
   const isPaused = sub.status === "paused"
 
   const statusLabel =
@@ -757,6 +846,7 @@ export function SubscriptionCard({
       aria-label={`${sub.name}, ${sub.category}, $${sub.price}/month, ${statusLabel}${isDuplicate ? ", duplicate" : ""}${unusedInfo ? ", unused" : ""}`}
     >
       <div className="flex items-center gap-4 flex-1">
+        {dragHandle}
         {selectedSubscriptions && onToggleSelect && (
           <input
             type="checkbox"
@@ -776,6 +866,26 @@ export function SubscriptionCard({
         <div className="flex-1">
           <div className="flex items-center gap-2">
             <h4 className={`font-semibold ${darkMode ? "text-white" : "text-gray-900"}`}>{sub.name}</h4>
+            {priorityRank && <PriorityBadge rank={priorityRank} darkMode={darkMode} />}
+            <div
+              className="flex items-center gap-1 text-xs text-gray-500"
+              title={
+                sub.is_encrypted
+                  ? "This subscription's on-chain data is encrypted"
+                  : "This subscription is stored in plaintext on-chain"
+              }
+            >
+              {sub.is_encrypted ? (
+                <Lock className="w-3 h-3 text-green-500" aria-hidden="true" />
+              ) : (
+                <LockOpen className="w-3 h-3 text-yellow-500" aria-hidden="true" />
+              )}
+              <span className="sr-only">
+                {sub.is_encrypted
+                  ? "This subscription's on-chain data is encrypted"
+                  : "This subscription is stored in plaintext on-chain"}
+              </span>
+            </div>
             {sub.isTrial && (
               <StatusBadge status="trial" darkMode={darkMode} />
             )}
@@ -840,8 +950,7 @@ export function SubscriptionCard({
           </div>
           {sub.isTrial && sub.trialEndsAt && (
             <p className={`text-xs ${darkMode ? "text-[#007A5C]" : "text-green-600"} mt-1`}>
-              Trial ends in {Math.ceil((new Date(sub.trialEndsAt).getTime() - new Date().getTime()) / (1000 * 60 * 60 * 24))} days - $
-              {sub.priceAfterTrial}/month after
+              Trial ends in {getDaysDifference(sub.trialEndsAt)} days - {formatCurrency(sub.priceAfterTrial || 0, currency)}/month after
             </p>
           )}
         </div>

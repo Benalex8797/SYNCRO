@@ -129,7 +129,7 @@ export function Header({
                         )}
                     </button>
                 )}
-                {activeView === "subscriptions" && onAddSubscription && (
+                {onAddSubscription && (
                     <button
                         onClick={onAddSubscription}
                         data-tour="add-subscription"

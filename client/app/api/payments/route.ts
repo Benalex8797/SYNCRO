@@ -1,10 +1,11 @@
 import { type NextRequest } from "next/server"
-import { createApiRoute, createSuccessResponse, validateRequestBody, RateLimiters, ApiErrors } from "@/lib/api/index"
+import { createAuthenticatedApiRoute, createSuccessResponse, validateRequestBody, RateLimiters, ApiErrors, emitAuditEvent } from "@/lib/api/index"
 import { HttpStatus } from "@/lib/api/types"
 import { z } from "zod"
 import { PaymentService } from "@/lib/payment-service"
+import { getAvailablePaymentProviders, isPaymentProviderEnabled } from "@/lib/feature-flags"
 
-// Validation schema
+// Validation schema - dynamically validate provider based on what's enabled
 const paymentSchema = z.object({
   amount: z.number().positive("Amount must be positive"),
   currency: z
@@ -13,15 +14,17 @@ const paymentSchema = z.object({
     .default("usd"),
   token: z.string().min(1, "Payment token is required"),
   planName: z.string().min(1, "Plan name is required"),
-  provider: z.enum(["stripe", "paypal", "mock"]).default("stripe"),
-});
+  provider: z.enum(["stripe", "paypal", "mock", "paystack"]).default("stripe"),
+}).refine(
+  (data) => isPaymentProviderEnabled(data.provider),
+  (data) => ({
+    message: `Payment provider '${data.provider}' is not enabled. Available providers: ${getAvailablePaymentProviders().join(', ')}`,
+    path: ['provider'],
+  })
+);
 
-export const POST = createApiRoute(
+export const POST = createAuthenticatedApiRoute(
   async (request: NextRequest, context, user) => {
-    if (!user) {
-      throw ApiErrors.unauthorized("User not authenticated");
-    }
-
     const body = await validateRequestBody(request, paymentSchema);
 
     const paymentService = new PaymentService({
@@ -45,6 +48,14 @@ export const POST = createApiRoute(
       );
     }
 
+    emitAuditEvent({
+      userId: user.id,
+      action: "payment.create",
+      resourceType: "payment",
+      resourceId: result.transactionId,
+      metadata: { provider: body.provider, currency: body.currency },
+    })
+
     return createSuccessResponse(
       {
         payment: {
@@ -60,7 +71,7 @@ export const POST = createApiRoute(
     );
   },
   {
-    requireAuth: true,
-    rateLimit: RateLimiters.strict,
+    rateLimit: RateLimiters.payment,
+    idempotent: true,
   },
 );

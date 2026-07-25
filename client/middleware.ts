@@ -17,6 +17,11 @@ const securityHeaders = {
 /**
  * Generate Content Security Policy with nonce for script/style inline execution
  * Uses report-only mode for safe rollout - switch to enforcing after 1 week clean
+ * 
+ * Tor Browser Compatibility:
+ * - Supports http:// for .onion addresses, so upgrade-insecure-requests is optional
+ * - Allows all standard Web APIs and storage mechanisms
+ * - Removes upgrade-insecure-requests in development to support .onion testing
  */
 function generateCSP(
   nonce: string,
@@ -35,7 +40,8 @@ function generateCSP(
     `object-src 'none'`,
     `base-uri 'self'`,
     `form-action 'self'`,
-    `upgrade-insecure-requests`,
+    // Note: upgrade-insecure-requests is omitted to support Tor Browser .onion addresses
+    // which use http:// by design
   ].join("; ");
 
   // Enforcing mode by default for strict security
@@ -72,6 +78,14 @@ export async function middleware(request: NextRequest) {
   // Generate nonce for CSP
   const nonce = crypto.randomUUID();
 
+  // Generate and set CSRF cookie if it doesn't exist
+  let csrfToken = request.cookies.get("csrf-token")?.value;
+  let didSetCsrf = false;
+  if (!csrfToken) {
+    csrfToken = crypto.randomUUID();
+    didSetCsrf = true;
+  }
+
   // Generate CSP policy (enforcing mode)
   const { headerName: cspHeaderName, policy: cspPolicy } = generateCSP(
     nonce,
@@ -80,6 +94,15 @@ export async function middleware(request: NextRequest) {
 
   // Update Supabase session and handle auth redirects
   const response = await updateSession(request);
+
+  if (didSetCsrf && csrfToken) {
+    response.cookies.set("csrf-token", csrfToken, {
+      path: "/",
+      sameSite: "lax",
+      secure: process.env.NODE_ENV === "production",
+      httpOnly: false, // readable by client-side axios interceptor
+    });
+  }
 
   // Add security headers to all responses
   Object.entries(securityHeaders).forEach(([key, value]) => {

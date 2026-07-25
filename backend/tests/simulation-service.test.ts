@@ -9,23 +9,20 @@ describe("SimulationService", () => {
   });
 
   describe("calculateNextRenewal", () => {
-    it("should add 30 days for monthly billing cycle", () => {
-      const currentDate = new Date("2024-01-01");
+    it("should add 1 month for monthly billing cycle", () => {
+      const currentDate = new Date("2024-01-01T00:00:00.000Z");
       const nextDate = service.calculateNextRenewal(currentDate, "monthly");
 
-      expect(nextDate.toISOString()).toBe(
-        new Date("2024-01-31").toISOString()
-      );
+      expect(nextDate.toISOString()).toBe(new Date("2024-02-01T00:00:00.000Z").toISOString());
     });
 
-    it("should add 90 days for quarterly billing cycle", () => {
-      const currentDate = new Date("2024-01-01");
+    it("should add 1 quarter for quarterly billing cycle", () => {
+      const currentDate = new Date("2024-01-01T00:00:00.000Z");
       const nextDate = service.calculateNextRenewal(currentDate, "quarterly");
 
-      expect(nextDate.toISOString()).toBe(
-        new Date("2024-03-31").toISOString()
-      );
+      expect(nextDate.toISOString()).toBe(new Date("2024-04-01T00:00:00.000Z").toISOString());
     });
+
 
     it("should add 365 days for yearly billing cycle", () => {
       const currentDate = new Date("2024-01-01");
@@ -101,7 +98,7 @@ describe("SimulationService", () => {
 
       const projections = service.projectSubscriptionRenewals(
         subscription as Subscription,
-        new Date("2024-03-01")
+        new Date("2024-02-15")
       );
 
       expect(projections).toHaveLength(2);
