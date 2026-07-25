@@ -69,11 +69,57 @@ export async function getSubscriptionTagIds(
   return (data ?? []).map((r: { tag_id: string }) => r.tag_id)
 }
 
-/** Assign a tag to a subscription. Idempotent (upsert). */
-export async function addTagToSubscription(
+/**
+ * Verify the subscription and tag both belong to userId.
+ * Throws if either resource is missing or owned by another user.
+ */
+async function assertSubscriptionAndTagOwnership(
+  userId: string,
   subscriptionId: string,
   tagId: string,
 ): Promise<void> {
+  const supabase = await createClient()
+
+  const { data: subscription, error: subError } = await supabase
+    .from("subscriptions")
+    .select("user_id")
+    .eq("id", subscriptionId)
+    .single()
+
+  if (subError || !subscription) {
+    throw new Error("Subscription not found")
+  }
+
+  if (subscription.user_id !== userId) {
+    throw new Error("Subscription does not belong to user")
+  }
+
+  const { data: tag, error: tagError } = await supabase
+    .from("subscription_tags")
+    .select("user_id")
+    .eq("id", tagId)
+    .single()
+
+  if (tagError || !tag) {
+    throw new Error("Tag not found")
+  }
+
+  if (tag.user_id !== userId) {
+    throw new Error("Tag does not belong to user")
+  }
+}
+
+/**
+ * Assign a tag to a subscription. Idempotent (upsert).
+ * Requires userId and verifies both subscription and tag ownership.
+ */
+export async function addTagToSubscription(
+  userId: string,
+  subscriptionId: string,
+  tagId: string,
+): Promise<void> {
+  await assertSubscriptionAndTagOwnership(userId, subscriptionId, tagId)
+
   const supabase = await createClient()
   const { error } = await supabase
     .from("subscription_tag_assignments")
@@ -82,11 +128,17 @@ export async function addTagToSubscription(
   if (error) throw new Error(`Failed to assign tag: ${error.message}`)
 }
 
-/** Remove a tag from a subscription. */
+/**
+ * Remove a tag from a subscription.
+ * Requires userId and verifies both subscription and tag ownership.
+ */
 export async function removeTagFromSubscription(
+  userId: string,
   subscriptionId: string,
   tagId: string,
 ): Promise<void> {
+  await assertSubscriptionAndTagOwnership(userId, subscriptionId, tagId)
+
   const supabase = await createClient()
   const { error } = await supabase
     .from("subscription_tag_assignments")
