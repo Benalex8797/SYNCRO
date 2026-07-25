@@ -8,6 +8,7 @@ import logger from '../config/logger';
 import { createApiKeySchema } from '../schemas/api-key';
 import { NotFoundError } from '../errors';
 import { auditApiKeyEvent } from '../services/audit-service';
+import { createApiKeyLimiter } from '../middleware/rate-limit-factory';
 
 const router: Router = Router();
 
@@ -25,6 +26,7 @@ function generateApiKey(): { key: string; hash: string } {
  */
 router.post(
   '/',
+  createApiKeyLimiter(),
   requireRole('owner', 'admin'),
   requireScope('subscriptions:write'),
   validate(createApiKeySchema),
