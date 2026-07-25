@@ -32,6 +32,7 @@ fn happy_path_open_close_and_top_up() {
     let closed = client.get_channel(&channel_id).unwrap();
     assert_eq!(closed.state, ChannelState::Closed);
     assert_eq!(closed.sequence, 1);
+
 }
 
 #[test]

@@ -28,19 +28,22 @@ contracts/
 │   ├── agent-registry/          # Authorized agents registry contract
 │   ├── allowance/               # Recurring allowance / spending-limit authority
 │   ├── escrow/                  # Payment holding escrow contract
+│   ├── payment-adapter/         # Multi-token renewal settlement adapter
 │   ├── subscription_logging/    # On-chain audit trail logging contract
 │   ├── subscription_renewal/    # Main subscription renewal logic contract
+│   ├── voucher-ledger/          # Gift-card voucher mint / redeem / void ledger
 │   └── virtual-card/            # Non-custodial virtual card contract
 ├── scripts/                     # Deployment and initialization scripts
+├── docs/                        # Event schema and contract hardening notes
 └── Cargo.toml                   # Cargo workspace configuration
 ```
 
-## Current State (April 2026)
+## Current State (July 2026)
 
 ### ✅ Implemented
 - **Core Contracts**: Functional renewal, escrow, and registry contracts.
 - **On-chain Logging**: Structured audit trail for subscription events.
-- **Stellar SDK 23**: Built on the latest Soroban stable release.
+- **Stellar SDK 26**: Built on the latest Soroban stable release.
 - **Test Infrastructure**: Automated snapshots and delegated execution tests.
 
 ### ⚠️ Partially Implemented
@@ -142,6 +145,20 @@ cargo test
 - `available` - Query the amount still pullable right now (min of remaining per-period and lifetime budgets).
 - `pause` / `unpause` / `is_paused` - Admin circuit-breaker over all consumption.
 
+### 8. Payment Adapter Contract (`contracts/contracts/payment-adapter/`)
+**Purpose**: Allowlisted multi-token settlement wrapper for renewal flows.
+- `allow_token` - Admin allowlists a Stellar Asset Contract and stores its decimals and cap.
+- `revoke_token` - Admin disables a token without deleting historical state.
+- `settle_renewal` - Payer-authorized transfer that scales display units into raw token units using the token's decimals.
+- `get_policy` / `available` / `is_allowed` - Read the current token policy and remaining cap.
+
+### 9. Voucher Ledger Contract (`contracts/contracts/voucher-ledger/`)
+**Purpose**: Gift-card voucher mint / redeem / void ledger with double-spend protection.
+- `mint_voucher` - Admin creates a voucher with a unique code hash and face value.
+- `redeem_voucher` - Voucher recipient redeems part or all of the balance.
+- `void_voucher` - Admin voids an active voucher and clears any remaining balance.
+- `get_voucher` / `balance` / `is_active` - Read voucher state and remaining balance.
+
 ## Contract Development Roadmap
 
 ### Completed (MVP Stage)
@@ -151,11 +168,19 @@ cargo test
 - [x] Non-custodial virtual cards with disposable/auto-close behavior
 - [x] On-chain audit logging system
 - [x] Recurring allowance authority with per-period and absolute spending caps
+- [x] Multi-token settlement adapter with token allowlists and per-token caps
+- [x] On-chain voucher ledger for gift-card balances
 
 ### Phase 3: Mainnet Hardening
 - [ ] Complete external security audits
 - [ ] Gas optimization for complex loops (e.g. multi-agent authorizations)
 - [ ] Integration with front-end SDKs
+
+## Event Schema
+
+See [`docs/contract-event-schema.md`](docs/contract-event-schema.md) for the
+canonical two-topic event convention used by the contracts and backend
+indexer.
 
 ## Development Guidelines
 
