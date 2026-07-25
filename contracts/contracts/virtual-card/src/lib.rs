@@ -353,6 +353,9 @@ impl VirtualCardContract {
 // ============================================================================
 
 #[cfg(test)]
+mod fuzz;
+
+#[cfg(test)]
 mod tests {
     use super::*;
     use soroban_sdk::{testutils::Address as _, Env};
