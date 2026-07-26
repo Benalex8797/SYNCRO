@@ -22,6 +22,7 @@ members = [
   "contracts/attestation",
   "contracts/guardian",
   "contracts/fx-oracle",
+  "contracts/payment-splitter",
 ]
 
 [workspace.dependencies]
