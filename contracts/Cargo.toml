@@ -21,6 +21,7 @@ members = [
   "contracts/subscription_nft",
   "contracts/attestation",
   "contracts/guardian",
+  "contracts/fx-oracle",
 ]
 
 [workspace.dependencies]
