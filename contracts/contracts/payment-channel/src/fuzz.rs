@@ -181,7 +181,7 @@ proptest! {
         prop_assert_eq!(closing.state, ChannelState::Closing);
 
         env.ledger().set_timestamp(closing.dispute_deadline + 1);
-        client.finalize(&channel_id);
+        client.finalize(&channel_id, &closing.sequence);
 
         let closed = client.get_channel(&channel_id).unwrap();
         prop_assert_eq!(closed.state, ChannelState::Closed);
@@ -189,5 +189,167 @@ proptest! {
             closed.balance_a.saturating_add(closed.balance_b),
             deposit
         );
+    }
+
+    #[test]
+    fn fuzz_finalize_sequence_mismatch_rejected(
+        deposit in 100i128..=1_000_000i128,
+        balance_b in 0i128..=100i128,
+        wrong_seq in 0u64..=100u64,
+    ) {
+        let (env, client, _admin, depositor, counterparty) = fuzz_setup();
+        let balance_b = balance_b.min(deposit);
+        let balance_a = deposit - balance_b;
+
+        let channel_id = client.open_channel(&depositor, &counterparty, &deposit, &1u64);
+        client.initiate_close(&channel_id, &balance_a, &balance_b, &5u64, &depositor);
+
+        let closing = client.get_channel(&channel_id).unwrap();
+        env.ledger().set_timestamp(closing.dispute_deadline + 1);
+
+        if wrong_seq != 5 {
+            let result = catch_unwind(AssertUnwindSafe(|| {
+                client.finalize(&channel_id, &wrong_seq);
+            }));
+            prop_assert!(result.is_err(), "finalize with wrong sequence must be rejected");
+        } else {
+            client.finalize(&channel_id, &5);
+            let closed = client.get_channel(&channel_id).unwrap();
+            prop_assert_eq!(closed.state, ChannelState::Closed);
+        }
+    }
+
+    #[test]
+    fn fuzz_finalize_before_window_rejected(
+        deposit in 100i128..=1_000_000i128,
+        balance_b in 0i128..=100i128,
+        time_offset in 0u64..=100u64,
+    ) {
+        let (env, client, _admin, depositor, counterparty) = fuzz_setup();
+        let balance_b = balance_b.min(deposit);
+        let balance_a = deposit - balance_b;
+
+        let channel_id = client.open_channel(&depositor, &counterparty, &deposit, &100u64);
+        client.initiate_close(&channel_id, &balance_a, &balance_b, &1u64, &depositor);
+
+        let closing = client.get_channel(&channel_id).unwrap();
+        env.ledger().set_timestamp(closing.dispute_deadline.saturating_sub(time_offset));
+
+        if time_offset < 100 {
+            let result = catch_unwind(AssertUnwindSafe(|| {
+                client.finalize(&channel_id, &1);
+            }));
+            prop_assert!(result.is_err(), "finalize before window must be rejected");
+        } else {
+            client.finalize(&channel_id, &1);
+            let closed = client.get_channel(&channel_id).unwrap();
+            prop_assert_eq!(closed.state, ChannelState::Closed);
+        }
+    }
+
+    #[test]
+    fn fuzz_dispute_stale_sequence_rejected(
+        deposit in 100i128..=1_000_000i128,
+        close_seq in 1u64..=100u64,
+        dispute_seq in 0u64..=100u64,
+    ) {
+        let (env, client, _admin, depositor, counterparty) = fuzz_setup();
+        let channel_id = client.open_channel(&depositor, &counterparty, &deposit, &100u64);
+        client.initiate_close(&channel_id, &deposit, &0i128, &close_seq, &depositor);
+
+        if dispute_seq <= close_seq {
+            let result = catch_unwind(AssertUnwindSafe(|| {
+                client.dispute(&channel_id, &deposit, &0i128, &dispute_seq, &depositor, &counterparty);
+            }));
+            prop_assert!(result.is_err(), "dispute with stale sequence must be rejected");
+        } else {
+            client.dispute(&channel_id, &deposit, &0i128, &dispute_seq, &depositor, &counterparty);
+            let channel = client.get_channel(&channel_id).unwrap();
+            prop_assert_eq!(channel.state, ChannelState::Dispute);
+        }
+    }
+
+    #[test]
+    fn fuzz_initiate_close_stale_sequence_rejected(
+        deposit in 100i128..=1_000_000i128,
+        state_seq in 1u64..=100u64,
+        close_seq in 0u64..=100u64,
+    ) {
+        let (env, client, _admin, depositor, counterparty) = fuzz_setup();
+        let channel_id = client.open_channel(&depositor, &counterparty, &deposit, &100u64);
+        client.submit_state(&channel_id, &deposit, &0i128, &state_seq, &depositor, &counterparty);
+
+        if close_seq <= state_seq {
+            let result = catch_unwind(AssertUnwindSafe(|| {
+                client.initiate_close(&channel_id, &deposit, &0i128, &close_seq, &depositor);
+            }));
+            prop_assert!(result.is_err(), "initiate_close with stale sequence must be rejected");
+        } else {
+            client.initiate_close(&channel_id, &deposit, &0i128, &close_seq, &depositor);
+            let channel = client.get_channel(&channel_id).unwrap();
+            prop_assert_eq!(channel.state, ChannelState::Closing);
+        }
+    }
+
+    #[test]
+    fn fuzz_top_up_during_close_rejected(
+        deposit in 100i128..=1_000_000i128,
+        top_up in 1i128..=100_000i128,
+    ) {
+        let (env, client, _admin, depositor, counterparty) = fuzz_setup();
+        let channel_id = client.open_channel(&depositor, &counterparty, &deposit, &100u64);
+        client.initiate_close(&channel_id, &deposit, &0i128, &1u64, &depositor);
+
+        let result = catch_unwind(AssertUnwindSafe(|| {
+            client.top_up(&channel_id, &top_up, &depositor);
+        }));
+        prop_assert!(result.is_err(), "top_up during close must be rejected");
+
+        let channel = client.get_channel(&channel_id).unwrap();
+        prop_assert_eq!(channel.balance_a, deposit);
+    }
+
+    #[test]
+    fn fuzz_top_up_during_dispute_rejected(
+        deposit in 100i128..=1_000_000i128,
+        top_up in 1i128..=100_000i128,
+    ) {
+        let (env, client, _admin, depositor, counterparty) = fuzz_setup();
+        let channel_id = client.open_channel(&depositor, &counterparty, &deposit, &100u64);
+        client.initiate_close(&channel_id, &deposit, &0i128, &1u64, &depositor);
+        client.dispute(&channel_id, &deposit, &0i128, &2u64, &depositor, &counterparty);
+
+        let result = catch_unwind(AssertUnwindSafe(|| {
+            client.top_up(&channel_id, &top_up, &depositor);
+        }));
+        prop_assert!(result.is_err(), "top_up during dispute must be rejected");
+
+        let channel = client.get_channel(&channel_id).unwrap();
+        prop_assert_eq!(channel.balance_a, deposit);
+    }
+
+    #[test]
+    fn fuzz_dispute_after_window_rejected(
+        deposit in 100i128..=1_000_000i128,
+        dispute_window in 1u64..=100u64,
+        time_offset in 0u64..=200u64,
+    ) {
+        let (env, client, _admin, depositor, counterparty) = fuzz_setup();
+        let channel_id = client.open_channel(&depositor, &counterparty, &deposit, &dispute_window);
+        client.initiate_close(&channel_id, &deposit, &0i128, &1u64, &depositor);
+
+        let closing = client.get_channel(&channel_id).unwrap();
+        env.ledger().set_timestamp(closing.dispute_deadline + time_offset);
+
+        if time_offset > 0 {
+            let result = catch_unwind(AssertUnwindSafe(|| {
+                client.dispute(&channel_id, &deposit, &0i128, &2u64, &depositor, &counterparty);
+            }));
+            prop_assert!(result.is_err(), "dispute after window must be rejected");
+        } else {
+            client.dispute(&channel_id, &deposit, &0i128, &2u64, &depositor, &counterparty);
+            let channel = client.get_channel(&channel_id).unwrap();
+            prop_assert_eq!(channel.state, ChannelState::Dispute);
+        }
     }
 }

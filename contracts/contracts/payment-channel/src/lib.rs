@@ -231,7 +231,7 @@ impl PaymentChannelContract {
         Ok(())
     }
 
-    pub fn finalize(env: Env, channel_id: u64) -> Result<(), Error> {
+    pub fn finalize(env: Env, channel_id: u64, expected_sequence: u64) -> Result<(), Error> {
         let mut channel: PaymentChannel = env
             .storage()
             .persistent()
@@ -243,6 +243,9 @@ impl PaymentChannelContract {
         }
         if env.ledger().timestamp() <= channel.dispute_deadline {
             return Err(Error::DisputeWindowActive);
+        }
+        if expected_sequence != channel.sequence {
+            return Err(Error::StaleState);
         }
 
         channel.state = ChannelState::Closed;
