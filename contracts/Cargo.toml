@@ -17,6 +17,7 @@ members = [
   "contracts/resolver-registry",
   "contracts/subscription_refund",
   "contracts/recurring_allowance",
+  "contracts/loyalty_rewards",
 ]
 
 [workspace.dependencies]
