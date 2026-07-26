@@ -4,6 +4,7 @@ import { metadataExtractionOnly } from './email-scanner'
 import type { RawScanResult } from './email-scanner'
 import { EXTERNAL_SERVICE_POLICIES } from '../config/external-services'
 import { encrypt, decrypt } from '../utils/encryption'
+import logger from '../config/logger'
 
 // Provider-specific IMAP configs
 const PROVIDER_CONFIGS: Record<string, { host: string; port: number; secure: boolean }> = {
@@ -55,7 +56,7 @@ interface ScanImapOptions {
 export async function scanImapSubscriptions(options: ScanImapOptions): Promise<RawScanResult[]> {
   // TODO: Implement actual IMAP connection logic with imapflow or similar library
   // This is a placeholder implementation that can be filled in once dependencies are installed
-  console.warn('[imap-service] scanImapSubscriptions is a placeholder implementation')
+  logger.warn('[imap-service] scanImapSubscriptions is a placeholder implementation')
   
   const results: RawScanResult[] = []
   
@@ -74,7 +75,7 @@ export async function scanImapSubscriptions(options: ScanImapOptions): Promise<R
  */
 export async function validateImapCredentials(email: string, password: string, provider: string): Promise<boolean> {
   // TODO: Implement actual validation logic
-  console.warn('[imap-service] validateImapCredentials is a placeholder implementation')
+  logger.warn('[imap-service] validateImapCredentials is a placeholder implementation')
   return true
 }
 
