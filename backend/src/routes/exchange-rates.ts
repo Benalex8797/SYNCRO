@@ -26,7 +26,15 @@ export function createExchangeRatesRouter(exchangeRateService: ExchangeRateServi
     res.json({
       success: true,
       data,
-      meta: { timestamp: new Date().toISOString() },
+      meta: {
+        timestamp: new Date().toISOString(),
+        // Explicit, top-level staleness signal so clients rendering converted
+        // totals can surface a "rates may be outdated" indicator without having
+        // to inspect the nested `data.source`.
+        stale: data.stale,
+        source: data.source,
+        ageMs: data.ageMs,
+      },
     });
   });
 
