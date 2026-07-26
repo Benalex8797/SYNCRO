@@ -190,6 +190,10 @@ node scripts/check-contributing.js
 node scripts/check-issue-governance.js
 ```
 
+## Repository scripts
+
+Reusable automation belongs in [`scripts/`](./scripts/) or the appropriate package-level `scripts/` directory. Do not keep one-off conflict-resolution helpers, temporary migration repair scripts, PR body drafts, or ad-hoc `fix*.js` files in the repository root. If a cleanup or migration helper is worth preserving, move it under `scripts/`, give it a descriptive name, and document when it should be run. Delete throwaway helpers once the underlying issue is resolved.
+
 ## Database and migrations
 
 Canonical migrations live in [`supabase/migrations/`](./supabase/migrations/). Legacy SQL under `backend/migrations/` is reference-only.
