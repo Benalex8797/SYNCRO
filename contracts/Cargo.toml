@@ -11,6 +11,8 @@ members = [
   "contracts/payment-channel",
   "contracts/contract-upgrade",
   "contracts/allowance",
+  "contracts/payment-adapter",
+  "contracts/voucher-ledger",
 ]
 
 [workspace.dependencies]

@@ -1,7 +1,7 @@
 #![no_std]
 
 use soroban_sdk::{
-    contract, contracterror, contractimpl, contracttype, symbol_short, Address, Env, Symbol,
+    contract, contracterror, contractimpl, contracttype, symbol_short, Address, Env,
 };
 
 #[contracttype]
@@ -109,7 +109,7 @@ impl PaymentChannelContract {
         env.storage().instance().set(&DataKey::ChannelCount, &id);
 
         env.events().publish(
-            (symbol_short!("channel"), symbol_short!("open")),
+            (symbol_short!("channel"), symbol_short!("opened")),
             (id, depositor, counterparty, deposit_amount, dispute_window),
         );
         Ok(id)
@@ -147,7 +147,7 @@ impl PaymentChannelContract {
 
         env.storage().persistent().set(&DataKey::Channel(channel_id), &channel);
         env.events().publish(
-            (symbol_short!("channel"), symbol_short!("state")),
+            (symbol_short!("channel"), symbol_short!("submitted")),
             (channel_id, balance_a, balance_b, sequence_number),
         );
         Ok(())
@@ -184,7 +184,7 @@ impl PaymentChannelContract {
 
         env.storage().persistent().set(&DataKey::Channel(channel_id), &channel);
         env.events().publish(
-            (symbol_short!("channel"), symbol_short!("init")),
+            (symbol_short!("channel"), symbol_short!("closing")),
             (channel_id, balance_a, balance_b, seq),
         );
         Ok(())
@@ -225,7 +225,7 @@ impl PaymentChannelContract {
 
         env.storage().persistent().set(&DataKey::Channel(channel_id), &channel);
         env.events().publish(
-            (symbol_short!("channel"), symbol_short!("dispute")),
+            (symbol_short!("channel"), symbol_short!("disputed")),
             (channel_id, balance_a, balance_b, higher_seq),
         );
         Ok(())
@@ -248,7 +248,7 @@ impl PaymentChannelContract {
         channel.state = ChannelState::Closed;
         env.storage().persistent().set(&DataKey::Channel(channel_id), &channel);
         env.events().publish(
-            (symbol_short!("channel"), symbol_short!("final")),
+            (symbol_short!("channel"), symbol_short!("closed")),
             (channel_id, channel.balance_a, channel.balance_b),
         );
         Ok(())
@@ -276,7 +276,7 @@ impl PaymentChannelContract {
         channel.balance_a += amount;
         env.storage().persistent().set(&DataKey::Channel(channel_id), &channel);
         env.events().publish(
-            (symbol_short!("channel"), symbol_short!("topup")),
+            (symbol_short!("channel"), symbol_short!("toppedup")),
             (channel_id, amount),
         );
         Ok(())
