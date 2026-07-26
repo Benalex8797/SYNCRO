@@ -13,6 +13,8 @@
     "test:watch": "vitest",
     "test:coverage": "vitest run --coverage",
     "test:storybook": "vitest run -c vitest.storybook.config.ts --project storybook",
+    "test:flaky": "tsx scripts/generate-flaky-dashboard.ts",
+    "test:flaky-report": "npm run test:flaky && open test-results/flaky-dashboard.html",
     "storybook": "storybook dev -p 6006",
     "build-storybook": "storybook build",
     "validate-env": "node scripts/validate-env.js",
@@ -23,6 +25,7 @@
     "e2e": "npx playwright test",
     "e2e:headed": "npx playwright test --headed",
     "e2e:report": "npx playwright show-report",
+    "e2e:flaky": "npx playwright test && cat test-results/flaky-tests.md",
     "test:a11y": "npx playwright test e2e/accessibility.spec.ts",
     "lint:deps": "node -e \"const p=require('./package.json');const bad=Object.entries({...p.dependencies,...p.devDependencies}).filter(([,v])=>v==='latest'||v==='*'||/^\\^?\\d+$/.test(v)).map(([n,v])=>n+'@'+v);if(bad.length){console.error('Loose dep ranges:',bad);process.exit(1);}else{console.log('All dep ranges OK');}\"",
     "preinstall": "npm run lint:deps"
