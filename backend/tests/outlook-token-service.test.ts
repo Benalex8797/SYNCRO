@@ -1,4 +1,4 @@
-import { GmailTokenService } from '../src/services/gmail-token-service';
+import { OutlookTokenService } from '../src/services/outlook-token-service';
 import * as encryption from '../src/utils/encryption';
 
 let mockSupabase: any;
@@ -12,7 +12,7 @@ jest.mock('../src/config/database', () => ({
 const mockedFetch = jest.fn();
 global.fetch = mockedFetch as unknown as typeof fetch;
 
-describe('GmailTokenService Security and Lifecycle', () => {
+describe('OutlookTokenService Security and Lifecycle', () => {
   const mockUserId = 'user-123';
   const rawAccessToken = 'raw-access-token';
   const rawRefreshToken = 'raw-refresh-token';
@@ -20,8 +20,8 @@ describe('GmailTokenService Security and Lifecycle', () => {
 
   beforeAll(() => {
     process.env.ENCRYPTION_KEY = encryptionKey;
-    process.env.GOOGLE_CLIENT_ID = 'test-client-id';
-    process.env.GOOGLE_CLIENT_SECRET = 'test-client-secret';
+    process.env.MICROSOFT_CLIENT_ID = 'test-client-id';
+    process.env.MICROSOFT_CLIENT_SECRET = 'test-client-secret';
   });
 
   beforeEach(() => {
@@ -46,11 +46,13 @@ describe('GmailTokenService Security and Lifecycle', () => {
       ok: true,
       json: jest.fn().mockResolvedValue({
         access_token: 'new-raw-access',
-        expires_in: 3600
+        expires_in: 3600,
+        scope: 'offline_access User.Read Mail.Read',
+        token_type: 'Bearer'
       }),
     });
 
-    await GmailTokenService.refreshAccessToken(mockUserId);
+    await OutlookTokenService.refreshAccessToken(mockUserId);
 
     // Verify update was called with encrypted content, not plaintext
     const updateCallArgs = updateMock.mock.calls[0][0];
@@ -88,7 +90,9 @@ describe('GmailTokenService Security and Lifecycle', () => {
             ok: true,
             json: () => Promise.resolve({
               access_token: 'concurrent-test-token',
-              expires_in: 3600
+              expires_in: 3600,
+              scope: 'offline_access User.Read Mail.Read',
+              token_type: 'Bearer'
             })
           }), 100
         )
@@ -97,7 +101,7 @@ describe('GmailTokenService Security and Lifecycle', () => {
 
     // Launch 5 concurrent refresh calls
     const promises = Array.from({ length: 5 }, () => 
-      GmailTokenService.refreshAccessToken(mockUserId)
+      OutlookTokenService.refreshAccessToken(mockUserId)
     );
 
     // Wait for all to resolve
@@ -113,7 +117,7 @@ describe('GmailTokenService Security and Lifecycle', () => {
     expect(updateMock).toHaveBeenCalledTimes(1);
   });
 
-  it('should revoke remote tokens and purge local credentials on disconnect', async () => {
+  it('should purge local credentials on disconnect', async () => {
     const encryptedRefresh = encryption.encrypt(rawRefreshToken);
     const encryptedAccess = encryption.encrypt(rawAccessToken);
 
@@ -131,17 +135,11 @@ describe('GmailTokenService Security and Lifecycle', () => {
       }),
       delete: deleteMock,
     };
-    mockedFetch.mockResolvedValue({ ok: true });
 
-    await GmailTokenService.disconnectGmailAccount(mockUserId);
+    await OutlookTokenService.disconnectOutlookAccount(mockUserId);
 
-    // 1. Verify mock network revocation call was made with decrypted token
-    expect(mockedFetch).toHaveBeenCalledWith(
-      expect.stringContaining('revoke?token=' + rawRefreshToken),
-      expect.objectContaining({ method: 'POST' })
-    );
-
-    // 2. Verify local database account was deleted
+    // Verify local database account was deleted
     expect(deleteMock).toHaveBeenCalledTimes(1);
   });
 });
+
