@@ -188,6 +188,7 @@ See [contracts/README.md](./contracts/README.md) for Stellar CLI setup.
 node scripts/check-env-docs.js
 node scripts/check-contributing.js
 node scripts/check-issue-governance.js
+node scripts/check-label-drift.js
 ```
 
 ## Repository scripts

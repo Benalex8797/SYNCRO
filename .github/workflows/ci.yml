@@ -259,6 +259,12 @@ jobs:
       - name: Run governance unit tests
         run: node --test scripts/check-issue-governance.test.js
 
+      - name: Check label drift against GitHub
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+        run: node scripts/check-label-drift.js
+
       - name: Validate CONTRIBUTING.md onboarding guide
         run: node scripts/check-contributing.js
 
