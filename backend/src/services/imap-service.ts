@@ -72,7 +72,6 @@ export async function scanImapSubscriptions(options: ScanImapOptions): Promise<R
     },
     logger: false,
   })
-
   const results: RawScanResult[] = []
 
   await client.connect()
@@ -199,4 +198,3 @@ export function getProviderImapConfig(provider: string) {
 }
 
 export { encrypt, decrypt }
-

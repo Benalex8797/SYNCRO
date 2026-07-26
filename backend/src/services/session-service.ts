@@ -135,17 +135,30 @@ export const sessionService = {
     }
 
     // 3. Force-sign-out all Supabase sessions for this user at the auth-server level
-    // Since we don't have the user's current JWT (we only have the userId), we perform
-    // a password-less ban/unban cycle on the Supabase auth server. Banning a user for a
-    // duration (e.g. '1h') invalidates all their sessions/refresh tokens. We then
-    // immediately restore access by setting ban_duration to 'none' so they can log back in.
-    const { error: banError } = await supabase.auth.admin.updateUserById(userId, { ban_duration: '1h' });
-    if (banError) {
-      logger.error('Failed to initiate ban cycle for global sign-out', { userId, error: banError.message });
-    } else {
-      const { error: unbanError } = await supabase.auth.admin.updateUserById(userId, { ban_duration: 'none' });
-      if (unbanError) {
-        logger.error('Failed to complete unban cycle for global sign-out', { userId, error: unbanError.message });
+    // Prefer native global sign-out when supported by the installed Supabase client.
+    const { error: signOutError } = await (supabase.auth.admin as any).signOut(userId, 'global');
+    if (signOutError) {
+      logger.warn(
+        'supabase.auth.admin.signOut(userId, "global") failed — falling back to ban cycle',
+        { userId, error: signOutError.message },
+      );
+
+      // Since we don't have the user's current JWT (only the userId), perform
+      // a password-less ban/unban cycle to invalidate all sessions/refresh tokens.
+      const { error: banError } = await supabase.auth.admin.updateUserById(userId, { ban_duration: '1h' });
+      if (banError) {
+        logger.error('Failed to initiate ban cycle for global sign-out', {
+          userId,
+          error: banError.message,
+        });
+      } else {
+        const { error: unbanError } = await supabase.auth.admin.updateUserById(userId, { ban_duration: 'none' });
+        if (unbanError) {
+          logger.error('Failed to complete unban cycle for global sign-out', {
+            userId,
+            error: unbanError.message,
+          });
+        }
       }
     }
 

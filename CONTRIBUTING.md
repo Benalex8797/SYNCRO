@@ -247,6 +247,31 @@ Use these for deep dives; the quick start above covers day-to-day local developm
 | Environment | [docs/ENVIRONMENT.md](./docs/ENVIRONMENT.md) | Env manifests and CI validation |
 | Code review | [docs/code-review-process.md](./docs/code-review-process.md) | Review expectations |
 
+## Pre-commit hooks
+
+Husky runs local gates before every commit so bad changes are caught before push. Config lives in [`.husky/pre-commit`](./.husky/pre-commit) (wired per #115).
+
+| Check | Command | Purpose |
+|-------|---------|---------|
+| **Lint** | `lint-staged` on `backend/` + `client/` | ESLint on staged files |
+| **Typecheck** | `npm run typecheck` | Workspace + root `tsc --noEmit` |
+| **Conflict markers** | `node scripts/check-conflict-markers.mjs` | Blocks unresolved `<<<<<<<` / `=======` / `>>>>>>>` |
+| **TODO policy** | `node scripts/check-todos.mjs` | Critical-path TODOs must use `TODO(#123):` form — see [DEBT.md](./DEBT.md) |
+
+**CI parity:** [`.github/workflows/pre-commit-parity.yml`](./.github/workflows/pre-commit-parity.yml) runs the same conflict, TODO, typecheck, and lint gates on every PR.
+
+After `npm install`, the `prepare` script makes `.husky/pre-commit` executable. To run checks without committing:
+
+```bash
+npm run lint:conflicts
+npm run lint:todos
+npm run typecheck
+# or all at once:
+npm run precommit:check
+```
+
+Skip hooks only when necessary: `HUSKY=0 git commit ...` (not for normal contributions).
+
 ## Branch naming
 
 ```
