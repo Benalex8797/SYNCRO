@@ -167,6 +167,13 @@ cargo test
 - `open_case` - An arbiter or admin opens a dispute case bound to an escrow agreement.
 - `vote` - An arbiter votes to release (1) or refund (2); reaching quorum fires the binding escrow callback.
 - `get_case` / `get_case_count` / `get_quorum` / `get_arbiters` / `is_arbiter` / `get_vote` - Queries.
+### 11. Recurring Allowance Contract (`contracts/contracts/recurring_allowance/`)
+**Purpose**: Standalone authority contract letting users pre-authorize merchants for capped recurring pulls.
+- `grant_allowance` - Grant capped recurring pull authorization with per-period and absolute limits.
+- `revoke_allowance` - Revoke an active recurring allowance.
+- `consume_allowance` - Merchant pulls authorized tokens within per-period and lifetime caps.
+- `update_allowance` - Update parameters for an active allowance.
+- `get_allowance` / `get_remaining_period_allowance` / `get_remaining_absolute_allowance` - Query allowance status and remaining capacity.
 
 ## Contract Development Roadmap
 
