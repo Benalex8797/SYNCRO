@@ -223,6 +223,118 @@ pub enum UserCapKey {
     UserSpent(Address),
 }
 
+// ── Multi-sig approval types ──────────────────────────────────────
+
+/// Storage key for multi-sig requests: (sub_id, request_id)
+#[contracttype]
+#[derive(Clone)]
+struct MultiSigKey {
+    ms_sub_id: u64,
+    ms_request_id: u64,
+}
+
+/// Storage key for team multi-sig threshold configuration
+#[contracttype]
+#[derive(Clone)]
+struct TeamThresholdKey {
+    team_id: u64,
+}
+
+/// Storage key for default signing window (seconds)
+#[contracttype]
+#[derive(Clone)]
+struct SigningWindowKey {
+    sw_team_id: u64,
+}
+
+/// Status of a multi-sig approval request
+#[contracttype]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum MultiSigStatus {
+    Pending = 0,
+    Approved = 1,
+    Cancelled = 2,
+    Expired = 3,
+}
+
+/// On-chain multi-sig approval request
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct MultiSigRequest {
+    pub sub_id: u64,
+    pub request_id: u64,
+    pub team_id: u64,
+    pub amount: i128,
+    pub requester: Address,
+    pub required_signers: soroban_sdk::Vec<Address>,
+    pub collected_signers: soroban_sdk::Vec<Address>,
+    pub created_at: u64,
+    pub expires_at: u64,
+    pub status: MultiSigStatus,
+}
+
+// ── Multi-sig events ──────────────────────────────────────────────
+
+#[contractevent]
+pub struct MultiSigRequested {
+    pub sub_id: u64,
+    pub request_id: u64,
+    pub team_id: u64,
+    pub amount: i128,
+    pub expires_at: u64,
+}
+
+#[contractevent]
+pub struct MultiSigSigned {
+    pub sub_id: u64,
+    pub request_id: u64,
+    pub signer: Address,
+    pub signatures_collected: u32,
+    pub signatures_required: u32,
+}
+
+#[contractevent]
+pub struct MultiSigApproved {
+    pub sub_id: u64,
+    pub request_id: u64,
+    pub team_id: u64,
+}
+
+#[contractevent]
+pub struct MultiSigCancelled {
+    pub sub_id: u64,
+    pub request_id: u64,
+    pub cancelled_by: Address,
+}
+
+#[contractevent]
+pub struct MultiSigExpired {
+    pub sub_id: u64,
+    pub request_id: u64,
+    pub expired_at: u64,
+}
+
+#[contractevent]
+pub struct MultiSigAuditLog {
+    pub sub_id: u64,
+    pub request_id: u64,
+    /// 1=requested, 2=signed, 3=approved, 4=cancelled, 5=expired
+    pub decision: u32,
+    pub actor: Address,
+    pub timestamp: u64,
+}
+
+#[contractevent]
+pub struct TeamThresholdUpdated {
+    pub team_id: u64,
+    pub threshold: i128,
+}
+
+/// Default threshold: 10_000_000 stroops ($100 USD equivalent)
+const DEFAULT_MULTISIG_THRESHOLD: i128 = 10_000_000;
+/// Default signing window: 24 hours in seconds
+const DEFAULT_SIGNING_WINDOW_SECS: u64 = 86_400;
+
 #[contract]
 pub struct SubscriptionRenewalContract;
 
@@ -918,6 +1030,367 @@ impl SubscriptionRenewalContract {
             .persistent()
             .get(&UserCapKey::UserSpent(user))
             .unwrap_or(0)
+    }
+
+    // ── Multi-sig approval management ─────────────────────────────
+
+    /// Set the multi-sig approval threshold for a team. Admin only.
+    /// `threshold` is denominated in stroops (1 XLM = 10_000_000 stroops).
+    /// Renewals exceeding this amount require multi-sig approval.
+    pub fn set_team_threshold(env: Env, team_id: u64, threshold: i128) {
+        Self::require_admin(&env);
+        if threshold < 0 {
+            panic!("Threshold must be non-negative");
+        }
+        let key = TeamThresholdKey { team_id };
+        env.storage().persistent().set(&key, &threshold);
+
+        TeamThresholdUpdated {
+            team_id,
+            threshold,
+        }
+        .publish(&env);
+    }
+
+    /// Get the multi-sig threshold for a team.
+    /// Returns the default ($100 equivalent) if not explicitly configured.
+    pub fn get_team_threshold(env: Env, team_id: u64) -> i128 {
+        let key = TeamThresholdKey { team_id };
+        env.storage()
+            .persistent()
+            .get(&key)
+            .unwrap_or(DEFAULT_MULTISIG_THRESHOLD)
+    }
+
+    /// Set the signing window duration for a team. Admin only.
+    /// `window_secs` is the number of seconds signers have to co-sign.
+    pub fn set_signing_window(env: Env, team_id: u64, window_secs: u64) {
+        Self::require_admin(&env);
+        if window_secs == 0 {
+            panic!("Signing window must be positive");
+        }
+        let key = SigningWindowKey { sw_team_id: team_id };
+        env.storage().persistent().set(&key, &window_secs);
+    }
+
+    /// Get the signing window for a team (defaults to 24h).
+    pub fn get_signing_window(env: Env, team_id: u64) -> u64 {
+        let key = SigningWindowKey { sw_team_id: team_id };
+        env.storage()
+            .persistent()
+            .get(&key)
+            .unwrap_or(DEFAULT_SIGNING_WINDOW_SECS)
+    }
+
+    /// Create a multi-sig renewal request.
+    /// Called when a renewal amount exceeds the team threshold.
+    /// The `requester` must be authenticated. `required_signers` is the list
+    /// of team admin addresses that must co-sign before the request is approved.
+    pub fn request_multisig_renewal(
+        env: Env,
+        sub_id: u64,
+        request_id: u64,
+        team_id: u64,
+        amount: i128,
+        requester: Address,
+        required_signers: soroban_sdk::Vec<Address>,
+    ) {
+        if Self::is_paused(env.clone()) {
+            panic!("Protocol is paused");
+        }
+        requester.require_auth();
+
+        // Validate subscription exists
+        let _data: SubscriptionData = env
+            .storage()
+            .persistent()
+            .get(&sub_id)
+            .expect("Subscription not found");
+
+        if required_signers.is_empty() {
+            panic!("At least one signer is required");
+        }
+
+        let now = env.ledger().timestamp();
+        let signing_window = Self::get_signing_window(env.clone(), team_id);
+        let expires_at = now + signing_window;
+
+        let ms_key = MultiSigKey {
+            ms_sub_id: sub_id,
+            ms_request_id: request_id,
+        };
+
+        // Prevent duplicate request IDs
+        if env.storage().persistent().has(&ms_key) {
+            panic!("Multi-sig request already exists");
+        }
+
+        let request = MultiSigRequest {
+            sub_id,
+            request_id,
+            team_id,
+            amount,
+            requester: requester.clone(),
+            required_signers: required_signers.clone(),
+            collected_signers: soroban_sdk::Vec::new(&env),
+            created_at: now,
+            expires_at,
+            status: MultiSigStatus::Pending,
+        };
+
+        env.storage().persistent().set(&ms_key, &request);
+
+        MultiSigRequested {
+            sub_id,
+            request_id,
+            team_id,
+            amount,
+            expires_at,
+        }
+        .publish(&env);
+
+        // Audit log: requested
+        MultiSigAuditLog {
+            sub_id,
+            request_id,
+            decision: 1,
+            actor: requester,
+            timestamp: now,
+        }
+        .publish(&env);
+    }
+
+    /// Sign (co-approve) a pending multi-sig renewal request.
+    /// The signer must be one of the `required_signers` and must authenticate.
+    /// When all required signatures are collected, the status transitions to Approved.
+    pub fn sign_multisig_renewal(
+        env: Env,
+        sub_id: u64,
+        request_id: u64,
+        signer: Address,
+    ) {
+        signer.require_auth();
+
+        let ms_key = MultiSigKey {
+            ms_sub_id: sub_id,
+            ms_request_id: request_id,
+        };
+
+        let mut request: MultiSigRequest = env
+            .storage()
+            .persistent()
+            .get(&ms_key)
+            .expect("Multi-sig request not found");
+
+        // Must be pending
+        if request.status != MultiSigStatus::Pending {
+            panic!("Multi-sig request is not pending");
+        }
+
+        // Check expiry
+        let now = env.ledger().timestamp();
+        if now >= request.expires_at {
+            // Auto-expire
+            request.status = MultiSigStatus::Expired;
+            env.storage().persistent().set(&ms_key, &request);
+            MultiSigExpired {
+                sub_id,
+                request_id,
+                expired_at: now,
+            }
+            .publish(&env);
+            MultiSigAuditLog {
+                sub_id,
+                request_id,
+                decision: 5,
+                actor: signer,
+                timestamp: now,
+            }
+            .publish(&env);
+            panic!("Multi-sig request has expired");
+        }
+
+        // Verify signer is in the required list
+        let mut is_required = false;
+        for required in request.required_signers.iter() {
+            if required == signer {
+                is_required = true;
+                break;
+            }
+        }
+        if !is_required {
+            panic!("Signer is not a required approver");
+        }
+
+        // Check for duplicate signature
+        for existing in request.collected_signers.iter() {
+            if existing == signer {
+                panic!("Signer has already signed this request");
+            }
+        }
+
+        // Collect signature
+        request.collected_signers.push_back(signer.clone());
+
+        let collected = request.collected_signers.len();
+        let required = request.required_signers.len();
+
+        MultiSigSigned {
+            sub_id,
+            request_id,
+            signer: signer.clone(),
+            signatures_collected: collected,
+            signatures_required: required,
+        }
+        .publish(&env);
+
+        // Audit log: signed
+        MultiSigAuditLog {
+            sub_id,
+            request_id,
+            decision: 2,
+            actor: signer.clone(),
+            timestamp: now,
+        }
+        .publish(&env);
+
+        // Check if all signatures collected
+        if collected >= required {
+            request.status = MultiSigStatus::Approved;
+
+            MultiSigApproved {
+                sub_id,
+                request_id,
+                team_id: request.team_id,
+            }
+            .publish(&env);
+
+            // Audit log: approved
+            MultiSigAuditLog {
+                sub_id,
+                request_id,
+                decision: 3,
+                actor: signer,
+                timestamp: now,
+            }
+            .publish(&env);
+        }
+
+        env.storage().persistent().set(&ms_key, &request);
+    }
+
+    /// Cancel a pending multi-sig renewal request. Admin only.
+    pub fn cancel_multisig_renewal(env: Env, sub_id: u64, request_id: u64) {
+        Self::require_admin(&env);
+
+        let ms_key = MultiSigKey {
+            ms_sub_id: sub_id,
+            ms_request_id: request_id,
+        };
+
+        let mut request: MultiSigRequest = env
+            .storage()
+            .persistent()
+            .get(&ms_key)
+            .expect("Multi-sig request not found");
+
+        if request.status != MultiSigStatus::Pending {
+            panic!("Can only cancel pending requests");
+        }
+
+        let admin: Address = env
+            .storage()
+            .instance()
+            .get(&ContractKey::Admin)
+            .expect("Contract not initialized");
+        let now = env.ledger().timestamp();
+
+        request.status = MultiSigStatus::Cancelled;
+        env.storage().persistent().set(&ms_key, &request);
+
+        MultiSigCancelled {
+            sub_id,
+            request_id,
+            cancelled_by: admin.clone(),
+        }
+        .publish(&env);
+
+        // Audit log: cancelled
+        MultiSigAuditLog {
+            sub_id,
+            request_id,
+            decision: 4,
+            actor: admin,
+            timestamp: now,
+        }
+        .publish(&env);
+    }
+
+    /// Expire a multi-sig request if its signing window has elapsed.
+    /// Can be called by anyone (e.g., a cron job) to garbage-collect stale requests.
+    pub fn expire_multisig_renewal(env: Env, sub_id: u64, request_id: u64) {
+        let ms_key = MultiSigKey {
+            ms_sub_id: sub_id,
+            ms_request_id: request_id,
+        };
+
+        let mut request: MultiSigRequest = env
+            .storage()
+            .persistent()
+            .get(&ms_key)
+            .expect("Multi-sig request not found");
+
+        if request.status != MultiSigStatus::Pending {
+            panic!("Request is not pending");
+        }
+
+        let now = env.ledger().timestamp();
+        if now < request.expires_at {
+            panic!("Signing window has not expired yet");
+        }
+
+        request.status = MultiSigStatus::Expired;
+        env.storage().persistent().set(&ms_key, &request);
+
+        MultiSigExpired {
+            sub_id,
+            request_id,
+            expired_at: now,
+        }
+        .publish(&env);
+
+        // Audit log: expired — use requester as actor since this is automated
+        MultiSigAuditLog {
+            sub_id,
+            request_id,
+            decision: 5,
+            actor: request.requester,
+            timestamp: now,
+        }
+        .publish(&env);
+    }
+
+    /// Query a multi-sig request.
+    pub fn get_multisig_request(
+        env: Env,
+        sub_id: u64,
+        request_id: u64,
+    ) -> MultiSigRequest {
+        let ms_key = MultiSigKey {
+            ms_sub_id: sub_id,
+            ms_request_id: request_id,
+        };
+        env.storage()
+            .persistent()
+            .get(&ms_key)
+            .expect("Multi-sig request not found")
+    }
+
+    /// Check whether a renewal amount exceeds the team's multi-sig threshold.
+    /// Returns true if multi-sig approval is required.
+    pub fn requires_multisig(env: Env, team_id: u64, amount: i128) -> bool {
+        let threshold = Self::get_team_threshold(env, team_id);
+        amount > threshold
     }
 }
 
