@@ -11,7 +11,7 @@ pub struct SubscriptionMetadata {
     pub expected_amount: i128,
     pub next_renewal: u64,
     pub is_active: bool,
-    pub encrypted_blob: Bytes,
+    pub encrypted_data: Option<String>,
 }
 
 #[contracttype]
@@ -120,7 +120,7 @@ impl SubscriptionRegistry {
             expected_amount,
             next_renewal,
             is_active: true,
-            encrypted_blob: encrypted_blob.clone(),
+            encrypted_data: None,
         };
         env.storage()
             .instance()
@@ -232,6 +232,26 @@ impl SubscriptionRegistry {
             service_id: metadata.service_id.clone(),
         }
         .publish(&env);
+    }
+
+    /// Store encrypted data for a subscription
+    pub fn store_encrypted_subscription(
+        env: Env,
+        subscription_id: BytesN<32>,
+        user: Address,
+        encrypted_data: String,
+    ) {
+        user.require_auth();
+        let mut metadata: SubscriptionMetadata = env
+            .storage()
+            .instance()
+            .get(&DataKey::Subscription(subscription_id.clone()))
+            .unwrap_or_else(|| panic!("subscription not found"));
+        
+        metadata.encrypted_data = Some(encrypted_data);
+        env.storage()
+            .instance()
+            .set(&DataKey::Subscription(subscription_id), &metadata);
     }
 
     /// Get subscription metadata by ID
