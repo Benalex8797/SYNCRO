@@ -29,6 +29,7 @@ contracts/
 │   ├── allowance/               # Recurring allowance / spending-limit authority
 │   ├── escrow/                  # Payment holding escrow contract
 │   ├── payment-adapter/         # Multi-token renewal settlement adapter
+│   ├── resolver-registry/       # Dispute arbitration / resolver registry
 │   ├── subscription_logging/    # On-chain audit trail logging contract
 │   ├── subscription_renewal/    # Main subscription renewal logic contract
 │   ├── voucher-ledger/          # Gift-card voucher mint / redeem / void ledger
@@ -158,6 +159,21 @@ cargo test
 - `redeem_voucher` - Voucher recipient redeems part or all of the balance.
 - `void_voucher` - Admin voids an active voucher and clears any remaining balance.
 - `get_voucher` / `balance` / `is_active` - Read voucher state and remaining balance.
+### 10. Resolver Registry Contract (`contracts/contracts/resolver-registry/`)
+**Purpose**: Decentralize escrow dispute resolution from a single admin arbiter to a voting set of arbiters. When a configurable quorum agrees on an outcome, the registry issues a binding `resolve_dispute` cross-contract call into the escrow. (Wire it up by setting the escrow's `arbiter` to the registry's contract address.)
+- `init` - Initialize with an admin and an initial quorum.
+- `add_arbiter` / `remove_arbiter` - Admin manages the arbiter voting set.
+- `set_quorum` - Admin adjusts the number of matching votes required to bind an outcome.
+- `open_case` - An arbiter or admin opens a dispute case bound to an escrow agreement.
+- `vote` - An arbiter votes to release (1) or refund (2); reaching quorum fires the binding escrow callback.
+- `get_case` / `get_case_count` / `get_quorum` / `get_arbiters` / `is_arbiter` / `get_vote` - Queries.
+### 11. Recurring Allowance Contract (`contracts/contracts/recurring_allowance/`)
+**Purpose**: Standalone authority contract letting users pre-authorize merchants for capped recurring pulls.
+- `grant_allowance` - Grant capped recurring pull authorization with per-period and absolute limits.
+- `revoke_allowance` - Revoke an active recurring allowance.
+- `consume_allowance` - Merchant pulls authorized tokens within per-period and lifetime caps.
+- `update_allowance` - Update parameters for an active allowance.
+- `get_allowance` / `get_remaining_period_allowance` / `get_remaining_absolute_allowance` - Query allowance status and remaining capacity.
 
 ## Contract Development Roadmap
 
@@ -165,6 +181,7 @@ cargo test
 - [x] On-chain subscription registry and tracking
 - [x] Multi-agent renewal registry with scope controls
 - [x] Secure escrow agreements with arbiter-mediated dispute resolution
+- [x] Decentralized dispute arbitration via a quorum-voting resolver registry
 - [x] Non-custodial virtual cards with disposable/auto-close behavior
 - [x] On-chain audit logging system
 - [x] Recurring allowance authority with per-period and absolute spending caps

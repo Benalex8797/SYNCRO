@@ -91,6 +91,7 @@ pub enum EscrowError {
     SameArbiterAsParty = 18,
     InvalidBasisPoints = 19,
     ArithmeticOverflow = 20,
+    CounterOverflow = 21,
 }
 
 // ── Events ────────────────────────────────────────────────────────────────────
@@ -217,7 +218,9 @@ impl EscrowContract {
             .instance()
             .get(&DataKey::EscrowCount)
             .unwrap_or(0);
-        let escrow_id = count + 1;
+        let escrow_id = count
+            .checked_add(1)
+            .unwrap_or_else(|| panic_with_error!(&env, EscrowError::CounterOverflow));
 
         let now = env.ledger().timestamp();
         if expires_at <= now {
@@ -1123,4 +1126,3 @@ mod test {
 
 #[cfg(test)]
 mod fuzz;
-

@@ -16,6 +16,39 @@ import {
 } from "@/lib/sync/offline-mutations"
 import { trackError } from "@/lib/telemetry"
 
+const PROTECTED_UPDATE_FIELDS = new Set([
+  "user_id",
+  "created_at",
+  "deleted_at",
+  "status",
+])
+
+const ALLOWED_UPDATE_FIELDS = new Set([
+  "name",
+  "category",
+  "price",
+  "icon",
+  "renews_in",
+  "color",
+  "renewal_url",
+  "tags",
+  "email_account_id",
+  "has_api_key",
+  "is_trial",
+  "trial_ends_at",
+  "price_after_trial",
+  "source",
+  "manually_edited",
+  "edited_fields",
+  "pricing_type",
+  "billing_cycle",
+  "active_until",
+  "paused_at",
+  "resumes_at",
+  "price_range",
+  "price_history",
+])
+
 // Last-write-wins with version tracking: the newer version becomes the base,
 // and the merged row is offered back to the client inside the 409 details.
 function resolveConflict(
@@ -60,6 +93,17 @@ export const POST = createAuthenticatedApiRoute(
 
       if (mutation.type === "update") {
         const { id, version, ...rest } = mutation.payload
+        const protectedFields = Object.keys(rest).filter(field =>
+          PROTECTED_UPDATE_FIELDS.has(field)
+        )
+
+        if (protectedFields.length > 0) {
+          throw ApiErrors.validationError(
+            "Cannot update protected fields",
+            protectedFields[0],
+            { fields: protectedFields }
+          )
+        }
 
         const { data: existing, error: fetchError } = await supabase
           .from("subscriptions")
@@ -67,7 +111,6 @@ export const POST = createAuthenticatedApiRoute(
           .eq("id", id)
           .eq("user_id", user.id)
           .single()
-
         if (fetchError && fetchError.code === "PGRST116") {
           throw ApiErrors.notFound("Subscription")
         }
@@ -84,9 +127,17 @@ export const POST = createAuthenticatedApiRoute(
           )
         }
 
+        if (version && version > (existing.version || 0) + 1) {
+          throw ApiErrors.validationError("Invalid version for update", "version")
+        }
+
+        const safeUpdates = Object.fromEntries(
+          Object.entries(rest).filter(([field]) => ALLOWED_UPDATE_FIELDS.has(field))
+        )
+
         const { data, error } = await supabase
           .from("subscriptions")
-          .update({ ...rest, version: (existing.version || 0) + 1 })
+          .update({ ...safeUpdates, version: (existing.version || 0) + 1 })
           .eq("id", id)
           .eq("user_id", user.id)
           .select()
