@@ -272,14 +272,31 @@ jobs:
         run: node --test scripts/check-contributing.test.js
 
   # ──────────────────────────────────────────────
-  # Job 3: Dependency vulnerability scan
-  # Blocks PRs with High or Critical vulnerabilities.
+  # Job 3: Dependency vulnerability scan (issue #1079)
+  # Re-establishes the audit gate that pr-728 removed. Runs once per
+  # npm workspace and gates on scripts/security-audit-gate.js, which
+  # reads .github/dependency-audit-allowlist.json and docs/security/
+  # dependency-triage.md. Drops --omit=dev so that dev-time CVEs
+  # (e.g. compromised eslint plugins) are surfaced.
+  #
+  # Skip-propagation: when no workspace files change, every matrix entry
+  # is skipped, so the aggregate `security-audit` is `skipped`. Downstream
+  # `build-client`, `test-client`, `test-backend`, `test-sdk` each declare
+  # `needs: security-audit`, so they will also be skipped. This is NOT a
+  # regression: each downstream already has its own workspace-gated `if:`
+  # and would skip in that scenario anyway. Do NOT remove the element-level
+  # `if:` on this matrix, that creates a real regression where downstream
+  # tests run without their own workspace being touched.
   # ──────────────────────────────────────────────
   security-audit:
-    name: Security Audit
+    name: Security Audit (${{ matrix.workspace }})
     runs-on: ubuntu-latest
-    needs: [changes, validate-dependencies]
-    if: ${{ needs.changes.outputs.force_full_run == 'true' || needs.changes.outputs.backend == 'true' || needs.changes.outputs.client == 'true' }}
+    needs: changes
+    if: ${{ needs.changes.outputs.force_full_run == 'true' || needs.changes.outputs[matrix.workspace] == 'true' }}
+    strategy:
+      fail-fast: false
+      matrix:
+        workspace: [backend, client, sdk, shared]
 
     steps:
       - name: Checkout repository
@@ -290,17 +307,15 @@ jobs:
         with:
           node-version: "20"
           cache: "npm"
-          cache-dependency-path: client/package-lock.json
+          cache-dependency-path: ${{ matrix.workspace }}/package-lock.json
 
-      - name: Audit client dependencies
-        if: ${{ needs.changes.outputs.force_full_run == 'true' || needs.changes.outputs.client == 'true' }}
-        working-directory: client
-        run: npm audit --audit-level=high --omit=dev
+      - name: Install ${{ matrix.workspace }} dependencies
+        working-directory: ${{ matrix.workspace }}
+        run: npm ci --ignore-scripts
 
-      - name: Audit backend dependencies
-        if: ${{ needs.changes.outputs.force_full_run == 'true' || needs.changes.outputs.backend == 'true' }}
-        working-directory: backend
-        run: npm audit --audit-level=high --omit=dev
+      - name: Run dependency audit gate
+        working-directory: ${{ matrix.workspace }}
+        run: node ../scripts/security-audit-gate.js ${{ matrix.workspace }} ${{ matrix.workspace }}
 
   # ──────────────────────────────────────────────
   # Job 4: Build the client
