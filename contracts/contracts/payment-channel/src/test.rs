@@ -338,3 +338,74 @@ fn finalize_open_channel_is_rejected() {
     let result = client.try_finalize(&channel_id, &0);
     assert_eq!(result, Err(Ok(Error::InvalidState)));
 }
+
+#[test]
+fn channel_id_uniqueness() {
+    let (env, _admin, depositor, counterparty, token, _token_client) = setup();
+    let client = register_contract(&env);
+
+    let id1 = client.open_channel(&depositor, &counterparty, &token, &100, &10);
+    let id2 = client.open_channel(&depositor, &counterparty, &token, &200, &10);
+    let id3 = client.open_channel(&depositor, &counterparty, &token, &300, &10);
+
+    assert_eq!(id1, 1);
+    assert_eq!(id2, 2);
+    assert_eq!(id3, 3);
+    assert_ne!(id1, id2);
+    assert_ne!(id2, id3);
+}
+
+#[test]
+fn channel_counter_overflow_guard() {
+    let (env, _admin, depositor, counterparty, token, _token_client) = setup();
+    let contract_id = env.register_contract(None, PaymentChannelContract);
+    let client = PaymentChannelContractClient::new(&env, &contract_id);
+    let admin = Address::generate(&env);
+    client.init(&admin);
+
+    env.as_contract(&contract_id, || {
+        env.storage().instance().set(&DataKey::ChannelCount, &u64::MAX);
+    });
+
+    let result = client.try_open_channel(&depositor, &counterparty, &token, &100, &10);
+    assert_eq!(result, Err(Ok(Error::CounterOverflow)));
+}
+
+#[test]
+fn unauthorized_initiate_close_fails() {
+    let (env, _admin, depositor, counterparty, token, _token_client) = setup();
+    let client = register_contract(&env);
+    let attacker = Address::generate(&env);
+
+    let channel_id = client.open_channel(&depositor, &counterparty, &token, &100, &10);
+    let result = client.try_initiate_close(&channel_id, &50, &50, &1, &attacker);
+
+    assert_eq!(result, Err(Ok(Error::Unauthorized)));
+}
+
+#[test]
+fn unauthorized_submit_state_fails() {
+    let (env, _admin, depositor, counterparty, token, _token_client) = setup();
+    let client = register_contract(&env);
+    let attacker1 = Address::generate(&env);
+    let attacker2 = Address::generate(&env);
+
+    let channel_id = client.open_channel(&depositor, &counterparty, &token, &100, &10);
+    let result = client.try_submit_state(&channel_id, &50, &50, &1, &attacker1, &attacker2);
+
+    assert_eq!(result, Err(Ok(Error::Unauthorized)));
+}
+
+#[test]
+fn unauthorized_dispute_fails() {
+    let (env, _admin, depositor, counterparty, token, _token_client) = setup();
+    let client = register_contract(&env);
+    let attacker1 = Address::generate(&env);
+    let attacker2 = Address::generate(&env);
+
+    let channel_id = client.open_channel(&depositor, &counterparty, &token, &100, &100);
+    client.initiate_close(&channel_id, &90, &10, &1, &depositor);
+
+    let result = client.try_dispute(&channel_id, &80, &20, &2, &attacker1, &attacker2);
+    assert_eq!(result, Err(Ok(Error::Unauthorized)));
+}

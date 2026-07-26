@@ -57,6 +57,7 @@ pub enum Error {
     DisputeWindowActive = 8,
     DisputeWindowExpired = 9,
     StaleState = 10,
+    CounterOverflow = 11,
 }
 
 #[contract]
@@ -110,7 +111,7 @@ impl PaymentChannelContract {
             .instance()
             .get(&DataKey::ChannelCount)
             .unwrap_or(0);
-        let id = count + 1;
+        let id = count.checked_add(1).ok_or(Error::CounterOverflow)?;
         let now = env.ledger().timestamp();
 
         // ── EFFECTS — record the channel state ───────────────────────────────
@@ -171,6 +172,11 @@ impl PaymentChannelContract {
         if sequence_number <= channel.sequence {
             return Err(Error::StaleState);
         }
+        if !((sig_a == channel.depositor && sig_b == channel.counterparty)
+            || (sig_a == channel.counterparty && sig_b == channel.depositor))
+        {
+            return Err(Error::Unauthorized);
+        }
 
         sig_a.require_auth();
         sig_b.require_auth();
@@ -209,6 +215,9 @@ impl PaymentChannelContract {
         }
         if seq <= channel.sequence {
             return Err(Error::StaleState);
+        }
+        if sig != channel.depositor && sig != channel.counterparty {
+            return Err(Error::Unauthorized);
         }
 
         sig.require_auth();
@@ -252,6 +261,11 @@ impl PaymentChannelContract {
         }
         if env.ledger().timestamp() > channel.dispute_deadline {
             return Err(Error::DisputeWindowExpired);
+        }
+        if !((sig_a == channel.depositor && sig_b == channel.counterparty)
+            || (sig_a == channel.counterparty && sig_b == channel.depositor))
+        {
+            return Err(Error::Unauthorized);
         }
 
         sig_a.require_auth();

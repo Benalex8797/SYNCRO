@@ -13,33 +13,21 @@ enum ContractKey {
     LoggingContract,
 }
 
-/// Storage key for approvals: (sub_id, approval_id)
+/// Tagged persistent storage keys.
 #[contracttype]
 #[derive(Clone)]
-struct ApprovalKey {
-    sub_id: u64,
-    approval_id: u64,
-}
-
-/// Storage key for cycle-level deduplication per subscription
-#[contracttype]
-#[derive(Clone)]
-struct CycleKey {
-    sub_id: u64,
-}
-
-/// Storage key for renewal processing lock
-#[contracttype]
-#[derive(Clone)]
-struct RenewalLockKey {
-    lock_sub_id: u64,
-}
-
-/// Storage key for lifecycle timestamps per subscription
-#[contracttype]
-#[derive(Clone)]
-struct LifecycleKey {
-    lifecycle_sub_id: u64,
+enum PersistentKey {
+    Subscription(u64),
+    Approval(u64, u64),
+    Cycle(u64),
+    RenewalLock(u64),
+    Lifecycle(u64),
+    Window(u64),
+    UserCap(Address),
+    UserSpent(Address),
+    MultiSig(u64, u64),
+    TeamThreshold(u64),
+    SigningWindow(u64),
 }
 
 /// Data stored for an active renewal lock
@@ -201,51 +189,12 @@ pub struct UserCapUpdated {
     pub cap: i128,
 }
 
-/// Storage key for renewal window per subscription
-#[contracttype]
-#[derive(Clone)]
-struct WindowKey {
-    sub_id: u64,
-}
-
 /// Billing window for a subscription renewal
 #[contracttype]
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct RenewalWindow {
     pub billing_start: u64,
     pub billing_end: u64,
-}
-
-/// Storage key for global user spending caps
-#[contracttype]
-#[derive(Clone)]
-pub enum UserCapKey {
-    UserCap(Address),
-    UserSpent(Address),
-}
-
-// ── Multi-sig approval types ──────────────────────────────────────
-
-/// Storage key for multi-sig requests: (sub_id, request_id)
-#[contracttype]
-#[derive(Clone)]
-struct MultiSigKey {
-    ms_sub_id: u64,
-    ms_request_id: u64,
-}
-
-/// Storage key for team multi-sig threshold configuration
-#[contracttype]
-#[derive(Clone)]
-struct TeamThresholdKey {
-    team_id: u64,
-}
-
-/// Storage key for default signing window (seconds)
-#[contracttype]
-#[derive(Clone)]
-struct SigningWindowKey {
-    sw_team_id: u64,
 }
 
 /// Status of a multi-sig approval request
@@ -394,15 +343,13 @@ impl SubscriptionRenewalContract {
             panic!("Protocol is paused");
         }
 
-        let lock_key = RenewalLockKey {
-            lock_sub_id: sub_id,
-        };
+        let lock_key = PersistentKey::RenewalLock(sub_id);
         let current_ledger = env.ledger().sequence();
 
         if let Some(existing) = env
             .storage()
             .persistent()
-            .get::<RenewalLockKey, RenewalLockData>(&lock_key)
+            .get::<PersistentKey, RenewalLockData>(&lock_key)
         {
             // Check if existing lock has expired
             if current_ledger < existing.locked_at + existing.lock_timeout {
@@ -433,9 +380,7 @@ impl SubscriptionRenewalContract {
 
     /// Release a processing lock for a subscription renewal.
     pub fn release_renewal_lock(env: Env, sub_id: u64) {
-        let lock_key = RenewalLockKey {
-            lock_sub_id: sub_id,
-        };
+        let lock_key = PersistentKey::RenewalLock(sub_id);
         if !env.storage().persistent().has(&lock_key) {
             panic!("No renewal lock to release");
         }
@@ -452,9 +397,7 @@ impl SubscriptionRenewalContract {
 
     /// Query the current renewal lock for a subscription.
     pub fn get_renewal_lock(env: Env, sub_id: u64) -> Option<RenewalLockData> {
-        let lock_key = RenewalLockKey {
-            lock_sub_id: sub_id,
-        };
+        let lock_key = PersistentKey::RenewalLock(sub_id);
         env.storage().persistent().get(&lock_key)
     }
 
@@ -470,6 +413,8 @@ impl SubscriptionRenewalContract {
         spending_cap: i128,
         sub_id: u64,
     ) {
+        owner.require_auth();
+
         let mut integrity_data = soroban_sdk::Vec::<soroban_sdk::Val>::new(&env);
         integrity_data.push_back(merchant.into_val(&env));
         integrity_data.push_back(amount.into_val(&env));
@@ -479,7 +424,7 @@ impl SubscriptionRenewalContract {
         // Use a simple hash of the vector of values
         let integrity_hash = env.crypto().sha256(&integrity_data.to_xdr(&env));
 
-        let key = sub_id;
+        let key = PersistentKey::Subscription(sub_id);
         let data = SubscriptionData {
             owner,
             merchant,
@@ -501,9 +446,7 @@ impl SubscriptionRenewalContract {
             last_renewed_at: 0,
             canceled_at: 0,
         };
-        let lc_key = LifecycleKey {
-            lifecycle_sub_id: sub_id,
-        };
+        let lc_key = PersistentKey::Lifecycle(sub_id);
         env.storage().persistent().set(&lc_key, &lifecycle);
 
         LifecycleTimestampUpdated {
@@ -546,7 +489,7 @@ impl SubscriptionRenewalContract {
 
     /// Explicitly cancel a subscription
     pub fn cancel_sub(env: Env, sub_id: u64) {
-        let key = sub_id;
+        let key = PersistentKey::Subscription(sub_id);
         let mut data: SubscriptionData = env
             .storage()
             .persistent()
@@ -563,9 +506,7 @@ impl SubscriptionRenewalContract {
         env.storage().persistent().set(&key, &data);
 
         // Update lifecycle timestamps
-        let lc_key = LifecycleKey {
-            lifecycle_sub_id: sub_id,
-        };
+        let lc_key = PersistentKey::Lifecycle(sub_id);
         let mut lifecycle: LifecycleTimestamps = env
             .storage()
             .persistent()
@@ -608,7 +549,7 @@ impl SubscriptionRenewalContract {
         max_spend: i128,
         expires_at: u32,
     ) {
-        let sub_key = sub_id;
+        let sub_key = PersistentKey::Subscription(sub_id);
         let data: SubscriptionData = env
             .storage()
             .persistent()
@@ -624,10 +565,7 @@ impl SubscriptionRenewalContract {
             used: false,
         };
 
-        let key = ApprovalKey {
-            sub_id,
-            approval_id,
-        };
+        let key = PersistentKey::Approval(sub_id, approval_id);
         env.storage().persistent().set(&key, &approval);
 
         ApprovalCreated {
@@ -641,10 +579,7 @@ impl SubscriptionRenewalContract {
 
     /// Validate and consume an approval
     fn consume_approval(env: &Env, sub_id: u64, approval_id: u64, amount: i128) -> bool {
-        let key = ApprovalKey {
-            sub_id,
-            approval_id,
-        };
+        let key = PersistentKey::Approval(sub_id, approval_id);
 
         let approval_opt: Option<RenewalApproval> = env.storage().persistent().get(&key);
 
@@ -721,7 +656,7 @@ impl SubscriptionRenewalContract {
         let current_ledger = env.ledger().sequence();
 
         // 2. Load subscription data
-        let key = sub_id;
+        let key = PersistentKey::Subscription(sub_id);
         let mut data: SubscriptionData = env
             .storage()
             .persistent()
@@ -734,9 +669,7 @@ impl SubscriptionRenewalContract {
         }
 
         // 4. Verify renewal lock exists and is not expired
-        let lock_key = RenewalLockKey {
-            lock_sub_id: sub_id,
-        };
+        let lock_key = PersistentKey::RenewalLock(sub_id);
         let lock_data: Option<RenewalLockData> = env.storage().persistent().get(&lock_key);
         match lock_data {
             None => panic!("Renewal lock required"),
@@ -748,7 +681,7 @@ impl SubscriptionRenewalContract {
         }
 
         // 5. Cycle guard: reject duplicate renewal for the same billing cycle
-        let cycle_key = CycleKey { sub_id };
+        let cycle_key = PersistentKey::Cycle(sub_id);
         let last_cycle: Option<u64> = env.storage().persistent().get(&cycle_key);
         if let Some(last) = last_cycle {
             if cycle_id == last {
@@ -768,8 +701,12 @@ impl SubscriptionRenewalContract {
         }
 
         // 7b. Enforce renewal window if configured
-        let window_key = WindowKey { sub_id };
-        if let Some(window) = env.storage().persistent().get::<WindowKey, RenewalWindow>(&window_key) {
+        let window_key = PersistentKey::Window(sub_id);
+        if let Some(window) = env
+            .storage()
+            .persistent()
+            .get::<PersistentKey, RenewalWindow>(&window_key)
+        {
             let current_time = env.ledger().timestamp();
             if current_time < window.billing_start || current_time > window.billing_end {
                 panic!("Outside renewal window");
@@ -806,13 +743,13 @@ impl SubscriptionRenewalContract {
         let global_cap: i128 = env
             .storage()
             .persistent()
-            .get(&UserCapKey::UserCap(data.owner.clone()))
+            .get(&PersistentKey::UserCap(data.owner.clone()))
             .unwrap_or(0);
         if global_cap > 0 {
             let current_spent: i128 = env
                 .storage()
                 .persistent()
-                .get(&UserCapKey::UserSpent(data.owner.clone()))
+                .get(&PersistentKey::UserSpent(data.owner.clone()))
                 .unwrap_or(0);
             if current_spent + amount > global_cap {
                 GlobalCapViolated {
@@ -839,11 +776,11 @@ impl SubscriptionRenewalContract {
             let current_spent: i128 = env
                 .storage()
                 .persistent()
-                .get(&UserCapKey::UserSpent(data.owner.clone()))
+                .get(&PersistentKey::UserSpent(data.owner.clone()))
                 .unwrap_or(0);
             env.storage()
                 .persistent()
-                .set(&UserCapKey::UserSpent(data.owner.clone()), &(current_spent + amount));
+                .set(&PersistentKey::UserSpent(data.owner.clone()), &(current_spent + amount));
 
             // Store cycle_id on success only
             env.storage().persistent().set(&cycle_key, &cycle_id);
@@ -856,9 +793,7 @@ impl SubscriptionRenewalContract {
             .publish(&env);
 
             // Update lifecycle timestamps
-            let lc_key = LifecycleKey {
-                lifecycle_sub_id: sub_id,
-            };
+            let lc_key = PersistentKey::Lifecycle(sub_id);
             let mut lifecycle: LifecycleTimestamps = env
                 .storage()
                 .persistent()
@@ -967,14 +902,12 @@ impl SubscriptionRenewalContract {
     pub fn get_sub(env: Env, sub_id: u64) -> SubscriptionData {
         env.storage()
             .persistent()
-            .get(&sub_id)
+            .get(&PersistentKey::Subscription(sub_id))
             .expect("Subscription not found")
     }
 
     pub fn get_lifecycle(env: Env, sub_id: u64) -> LifecycleTimestamps {
-        let lc_key = LifecycleKey {
-            lifecycle_sub_id: sub_id,
-        };
+        let lc_key = PersistentKey::Lifecycle(sub_id);
         env.storage()
             .persistent()
             .get(&lc_key)
@@ -987,7 +920,7 @@ impl SubscriptionRenewalContract {
         if billing_start >= billing_end {
             panic!("Invalid window: start must be before end");
         }
-        let key = WindowKey { sub_id };
+        let key = PersistentKey::Window(sub_id);
         let window = RenewalWindow {
             billing_start,
             billing_end,
@@ -1003,7 +936,7 @@ impl SubscriptionRenewalContract {
 
     /// Get the billing window for a subscription.
     pub fn get_window(env: Env, sub_id: u64) -> Option<RenewalWindow> {
-        let key = WindowKey { sub_id };
+        let key = PersistentKey::Window(sub_id);
         env.storage().persistent().get(&key)
     }
 
@@ -1012,7 +945,7 @@ impl SubscriptionRenewalContract {
         Self::require_admin(&env);
         env.storage()
             .persistent()
-            .set(&UserCapKey::UserCap(user.clone()), &cap);
+            .set(&PersistentKey::UserCap(user.clone()), &cap);
         UserCapUpdated { user, cap }.publish(&env);
     }
 
@@ -1020,7 +953,7 @@ impl SubscriptionRenewalContract {
     pub fn get_user_cap(env: Env, user: Address) -> i128 {
         env.storage()
             .persistent()
-            .get(&UserCapKey::UserCap(user))
+            .get(&PersistentKey::UserCap(user))
             .unwrap_or(0)
     }
 
@@ -1028,7 +961,7 @@ impl SubscriptionRenewalContract {
     pub fn get_user_spent(env: Env, user: Address) -> i128 {
         env.storage()
             .persistent()
-            .get(&UserCapKey::UserSpent(user))
+            .get(&PersistentKey::UserSpent(user))
             .unwrap_or(0)
     }
 
@@ -1042,7 +975,7 @@ impl SubscriptionRenewalContract {
         if threshold < 0 {
             panic!("Threshold must be non-negative");
         }
-        let key = TeamThresholdKey { team_id };
+        let key = PersistentKey::TeamThreshold(team_id);
         env.storage().persistent().set(&key, &threshold);
 
         TeamThresholdUpdated {
@@ -1055,7 +988,7 @@ impl SubscriptionRenewalContract {
     /// Get the multi-sig threshold for a team.
     /// Returns the default ($100 equivalent) if not explicitly configured.
     pub fn get_team_threshold(env: Env, team_id: u64) -> i128 {
-        let key = TeamThresholdKey { team_id };
+        let key = PersistentKey::TeamThreshold(team_id);
         env.storage()
             .persistent()
             .get(&key)
@@ -1069,13 +1002,13 @@ impl SubscriptionRenewalContract {
         if window_secs == 0 {
             panic!("Signing window must be positive");
         }
-        let key = SigningWindowKey { sw_team_id: team_id };
+        let key = PersistentKey::SigningWindow(team_id);
         env.storage().persistent().set(&key, &window_secs);
     }
 
     /// Get the signing window for a team (defaults to 24h).
     pub fn get_signing_window(env: Env, team_id: u64) -> u64 {
-        let key = SigningWindowKey { sw_team_id: team_id };
+        let key = PersistentKey::SigningWindow(team_id);
         env.storage()
             .persistent()
             .get(&key)
@@ -1104,7 +1037,7 @@ impl SubscriptionRenewalContract {
         let _data: SubscriptionData = env
             .storage()
             .persistent()
-            .get(&sub_id)
+            .get(&PersistentKey::Subscription(sub_id))
             .expect("Subscription not found");
 
         if required_signers.is_empty() {
@@ -1115,10 +1048,7 @@ impl SubscriptionRenewalContract {
         let signing_window = Self::get_signing_window(env.clone(), team_id);
         let expires_at = now + signing_window;
 
-        let ms_key = MultiSigKey {
-            ms_sub_id: sub_id,
-            ms_request_id: request_id,
-        };
+        let ms_key = PersistentKey::MultiSig(sub_id, request_id);
 
         // Prevent duplicate request IDs
         if env.storage().persistent().has(&ms_key) {
@@ -1171,10 +1101,7 @@ impl SubscriptionRenewalContract {
     ) {
         signer.require_auth();
 
-        let ms_key = MultiSigKey {
-            ms_sub_id: sub_id,
-            ms_request_id: request_id,
-        };
+        let ms_key = PersistentKey::MultiSig(sub_id, request_id);
 
         let mut request: MultiSigRequest = env
             .storage()
@@ -1283,10 +1210,7 @@ impl SubscriptionRenewalContract {
     pub fn cancel_multisig_renewal(env: Env, sub_id: u64, request_id: u64) {
         Self::require_admin(&env);
 
-        let ms_key = MultiSigKey {
-            ms_sub_id: sub_id,
-            ms_request_id: request_id,
-        };
+        let ms_key = PersistentKey::MultiSig(sub_id, request_id);
 
         let mut request: MultiSigRequest = env
             .storage()
@@ -1329,10 +1253,7 @@ impl SubscriptionRenewalContract {
     /// Expire a multi-sig request if its signing window has elapsed.
     /// Can be called by anyone (e.g., a cron job) to garbage-collect stale requests.
     pub fn expire_multisig_renewal(env: Env, sub_id: u64, request_id: u64) {
-        let ms_key = MultiSigKey {
-            ms_sub_id: sub_id,
-            ms_request_id: request_id,
-        };
+        let ms_key = PersistentKey::MultiSig(sub_id, request_id);
 
         let mut request: MultiSigRequest = env
             .storage()
@@ -1376,10 +1297,7 @@ impl SubscriptionRenewalContract {
         sub_id: u64,
         request_id: u64,
     ) -> MultiSigRequest {
-        let ms_key = MultiSigKey {
-            ms_sub_id: sub_id,
-            ms_request_id: request_id,
-        };
+        let ms_key = PersistentKey::MultiSig(sub_id, request_id);
         env.storage()
             .persistent()
             .get(&ms_key)

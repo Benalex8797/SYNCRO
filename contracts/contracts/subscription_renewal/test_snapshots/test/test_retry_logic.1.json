@@ -7,7 +7,40 @@
   "auth": [
     [],
     [],
-    [],
+    [
+      [
+        "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAHK3M",
+        {
+          "function": {
+            "contract_fn": {
+              "contract_address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD2KM",
+              "function_name": "init_sub",
+              "args": [
+                {
+                  "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAHK3M"
+                },
+                {
+                  "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAITA4"
+                },
+                {
+                  "i128": "500"
+                },
+                {
+                  "u64": "86400"
+                },
+                {
+                  "i128": "1000"
+                },
+                {
+                  "u64": "456"
+                }
+              ]
+            }
+          },
+          "sub_invocations": []
+        }
+      ]
+    ],
     [
       [
         "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAHK3M",
@@ -102,7 +135,7 @@
     []
   ],
   "ledger": {
-    "protocol_version": 26,
+    "protocol_version": 27,
     "sequence_number": 120,
     "timestamp": 0,
     "network_id": "0000000000000000000000000000000000000000000000000000000000000000",
@@ -119,7 +152,263 @@
               "ext": "v0",
               "contract": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD2KM",
               "key": {
-                "u64": "456"
+                "vec": [
+                  {
+                    "symbol": "Approval"
+                  },
+                  {
+                    "u64": "456"
+                  },
+                  {
+                    "u64": "1"
+                  }
+                ]
+              },
+              "durability": "persistent",
+              "val": {
+                "map": [
+                  {
+                    "key": {
+                      "symbol": "expires_at"
+                    },
+                    "val": {
+                      "u32": 200
+                    }
+                  },
+                  {
+                    "key": {
+                      "symbol": "max_spend"
+                    },
+                    "val": {
+                      "i128": "1000"
+                    }
+                  },
+                  {
+                    "key": {
+                      "symbol": "sub_id"
+                    },
+                    "val": {
+                      "u64": "456"
+                    }
+                  },
+                  {
+                    "key": {
+                      "symbol": "used"
+                    },
+                    "val": {
+                      "bool": true
+                    }
+                  }
+                ]
+              }
+            }
+          },
+          "ext": "v0"
+        },
+        "live_until": 4095
+      },
+      {
+        "entry": {
+          "last_modified_ledger_seq": 0,
+          "data": {
+            "contract_data": {
+              "ext": "v0",
+              "contract": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD2KM",
+              "key": {
+                "vec": [
+                  {
+                    "symbol": "Approval"
+                  },
+                  {
+                    "u64": "456"
+                  },
+                  {
+                    "u64": "2"
+                  }
+                ]
+              },
+              "durability": "persistent",
+              "val": {
+                "map": [
+                  {
+                    "key": {
+                      "symbol": "expires_at"
+                    },
+                    "val": {
+                      "u32": 200
+                    }
+                  },
+                  {
+                    "key": {
+                      "symbol": "max_spend"
+                    },
+                    "val": {
+                      "i128": "1000"
+                    }
+                  },
+                  {
+                    "key": {
+                      "symbol": "sub_id"
+                    },
+                    "val": {
+                      "u64": "456"
+                    }
+                  },
+                  {
+                    "key": {
+                      "symbol": "used"
+                    },
+                    "val": {
+                      "bool": true
+                    }
+                  }
+                ]
+              }
+            }
+          },
+          "ext": "v0"
+        },
+        "live_until": 4195
+      },
+      {
+        "entry": {
+          "last_modified_ledger_seq": 0,
+          "data": {
+            "contract_data": {
+              "ext": "v0",
+              "contract": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD2KM",
+              "key": {
+                "vec": [
+                  {
+                    "symbol": "Approval"
+                  },
+                  {
+                    "u64": "456"
+                  },
+                  {
+                    "u64": "3"
+                  }
+                ]
+              },
+              "durability": "persistent",
+              "val": {
+                "map": [
+                  {
+                    "key": {
+                      "symbol": "expires_at"
+                    },
+                    "val": {
+                      "u32": 200
+                    }
+                  },
+                  {
+                    "key": {
+                      "symbol": "max_spend"
+                    },
+                    "val": {
+                      "i128": "1000"
+                    }
+                  },
+                  {
+                    "key": {
+                      "symbol": "sub_id"
+                    },
+                    "val": {
+                      "u64": "456"
+                    }
+                  },
+                  {
+                    "key": {
+                      "symbol": "used"
+                    },
+                    "val": {
+                      "bool": true
+                    }
+                  }
+                ]
+              }
+            }
+          },
+          "ext": "v0"
+        },
+        "live_until": 4215
+      },
+      {
+        "entry": {
+          "last_modified_ledger_seq": 0,
+          "data": {
+            "contract_data": {
+              "ext": "v0",
+              "contract": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD2KM",
+              "key": {
+                "vec": [
+                  {
+                    "symbol": "Lifecycle"
+                  },
+                  {
+                    "u64": "456"
+                  }
+                ]
+              },
+              "durability": "persistent",
+              "val": {
+                "map": [
+                  {
+                    "key": {
+                      "symbol": "activated_at"
+                    },
+                    "val": {
+                      "u64": "0"
+                    }
+                  },
+                  {
+                    "key": {
+                      "symbol": "canceled_at"
+                    },
+                    "val": {
+                      "u64": "0"
+                    }
+                  },
+                  {
+                    "key": {
+                      "symbol": "created_at"
+                    },
+                    "val": {
+                      "u64": "0"
+                    }
+                  },
+                  {
+                    "key": {
+                      "symbol": "last_renewed_at"
+                    },
+                    "val": {
+                      "u64": "0"
+                    }
+                  }
+                ]
+              }
+            }
+          },
+          "ext": "v0"
+        },
+        "live_until": 4095
+      },
+      {
+        "entry": {
+          "last_modified_ledger_seq": 0,
+          "data": {
+            "contract_data": {
+              "ext": "v0",
+              "contract": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD2KM",
+              "key": {
+                "vec": [
+                  {
+                    "symbol": "Subscription"
+                  },
+                  {
+                    "u64": "456"
+                  }
+                ]
               },
               "durability": "persistent",
               "val": {
@@ -198,278 +487,6 @@
                           "symbol": "Failed"
                         }
                       ]
-                    }
-                  }
-                ]
-              }
-            }
-          },
-          "ext": "v0"
-        },
-        "live_until": 4095
-      },
-      {
-        "entry": {
-          "last_modified_ledger_seq": 0,
-          "data": {
-            "contract_data": {
-              "ext": "v0",
-              "contract": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD2KM",
-              "key": {
-                "map": [
-                  {
-                    "key": {
-                      "symbol": "approval_id"
-                    },
-                    "val": {
-                      "u64": "1"
-                    }
-                  },
-                  {
-                    "key": {
-                      "symbol": "sub_id"
-                    },
-                    "val": {
-                      "u64": "456"
-                    }
-                  }
-                ]
-              },
-              "durability": "persistent",
-              "val": {
-                "map": [
-                  {
-                    "key": {
-                      "symbol": "expires_at"
-                    },
-                    "val": {
-                      "u32": 200
-                    }
-                  },
-                  {
-                    "key": {
-                      "symbol": "max_spend"
-                    },
-                    "val": {
-                      "i128": "1000"
-                    }
-                  },
-                  {
-                    "key": {
-                      "symbol": "sub_id"
-                    },
-                    "val": {
-                      "u64": "456"
-                    }
-                  },
-                  {
-                    "key": {
-                      "symbol": "used"
-                    },
-                    "val": {
-                      "bool": true
-                    }
-                  }
-                ]
-              }
-            }
-          },
-          "ext": "v0"
-        },
-        "live_until": 4095
-      },
-      {
-        "entry": {
-          "last_modified_ledger_seq": 0,
-          "data": {
-            "contract_data": {
-              "ext": "v0",
-              "contract": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD2KM",
-              "key": {
-                "map": [
-                  {
-                    "key": {
-                      "symbol": "approval_id"
-                    },
-                    "val": {
-                      "u64": "2"
-                    }
-                  },
-                  {
-                    "key": {
-                      "symbol": "sub_id"
-                    },
-                    "val": {
-                      "u64": "456"
-                    }
-                  }
-                ]
-              },
-              "durability": "persistent",
-              "val": {
-                "map": [
-                  {
-                    "key": {
-                      "symbol": "expires_at"
-                    },
-                    "val": {
-                      "u32": 200
-                    }
-                  },
-                  {
-                    "key": {
-                      "symbol": "max_spend"
-                    },
-                    "val": {
-                      "i128": "1000"
-                    }
-                  },
-                  {
-                    "key": {
-                      "symbol": "sub_id"
-                    },
-                    "val": {
-                      "u64": "456"
-                    }
-                  },
-                  {
-                    "key": {
-                      "symbol": "used"
-                    },
-                    "val": {
-                      "bool": true
-                    }
-                  }
-                ]
-              }
-            }
-          },
-          "ext": "v0"
-        },
-        "live_until": 4195
-      },
-      {
-        "entry": {
-          "last_modified_ledger_seq": 0,
-          "data": {
-            "contract_data": {
-              "ext": "v0",
-              "contract": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD2KM",
-              "key": {
-                "map": [
-                  {
-                    "key": {
-                      "symbol": "approval_id"
-                    },
-                    "val": {
-                      "u64": "3"
-                    }
-                  },
-                  {
-                    "key": {
-                      "symbol": "sub_id"
-                    },
-                    "val": {
-                      "u64": "456"
-                    }
-                  }
-                ]
-              },
-              "durability": "persistent",
-              "val": {
-                "map": [
-                  {
-                    "key": {
-                      "symbol": "expires_at"
-                    },
-                    "val": {
-                      "u32": 200
-                    }
-                  },
-                  {
-                    "key": {
-                      "symbol": "max_spend"
-                    },
-                    "val": {
-                      "i128": "1000"
-                    }
-                  },
-                  {
-                    "key": {
-                      "symbol": "sub_id"
-                    },
-                    "val": {
-                      "u64": "456"
-                    }
-                  },
-                  {
-                    "key": {
-                      "symbol": "used"
-                    },
-                    "val": {
-                      "bool": true
-                    }
-                  }
-                ]
-              }
-            }
-          },
-          "ext": "v0"
-        },
-        "live_until": 4215
-      },
-      {
-        "entry": {
-          "last_modified_ledger_seq": 0,
-          "data": {
-            "contract_data": {
-              "ext": "v0",
-              "contract": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD2KM",
-              "key": {
-                "map": [
-                  {
-                    "key": {
-                      "symbol": "lifecycle_sub_id"
-                    },
-                    "val": {
-                      "u64": "456"
-                    }
-                  }
-                ]
-              },
-              "durability": "persistent",
-              "val": {
-                "map": [
-                  {
-                    "key": {
-                      "symbol": "activated_at"
-                    },
-                    "val": {
-                      "u64": "0"
-                    }
-                  },
-                  {
-                    "key": {
-                      "symbol": "canceled_at"
-                    },
-                    "val": {
-                      "u64": "0"
-                    }
-                  },
-                  {
-                    "key": {
-                      "symbol": "created_at"
-                    },
-                    "val": {
-                      "u64": "0"
-                    }
-                  },
-                  {
-                    "key": {
-                      "symbol": "last_renewed_at"
-                    },
-                    "val": {
-                      "u64": "0"
                     }
                   }
                 ]
@@ -566,6 +583,26 @@
           },
           "ext": "v0"
         },
+        "live_until": 6312099
+      },
+      {
+        "entry": {
+          "last_modified_ledger_seq": 0,
+          "data": {
+            "contract_data": {
+              "ext": "v0",
+              "contract": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAHK3M",
+              "key": {
+                "ledger_key_nonce": {
+                  "nonce": "4837995959683129791"
+                }
+              },
+              "durability": "temporary",
+              "val": "void"
+            }
+          },
+          "ext": "v0"
+        },
         "live_until": 6312119
       },
       {
@@ -586,7 +623,7 @@
           },
           "ext": "v0"
         },
-        "live_until": 6312099
+        "live_until": 6311999
       },
       {
         "entry": {

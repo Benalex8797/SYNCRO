@@ -42,11 +42,10 @@ proptest! {
         let client = register_client(&env);
 
         let card_id = client
-            .issue_card(&user, &amount, &CardType::Standard, &0u64)
-            .unwrap();
+            .issue_card(&user, &amount, &CardType::Standard, &0u64);
 
         prop_assert_eq!(client.get_balance(&card_id), amount);
-        let card = client.get_card(&card_id).unwrap();
+        let card = client.get_card(&card_id);
         prop_assert_eq!(card.balance, amount);
         prop_assert_eq!(card.status, CardStatus::Active);
     }
@@ -63,11 +62,10 @@ proptest! {
         let merchant = String::from_str(&env, "merchant");
 
         let card_id = client
-            .issue_card(&user, &initial, &CardType::Standard, &0u64)
-            .unwrap();
+            .issue_card(&user, &initial, &CardType::Standard, &0u64);
 
         if payment <= initial {
-            client.process_payment(&card_id, &payment, &merchant).unwrap();
+            client.process_payment(&card_id, &payment, &merchant);
             prop_assert_eq!(client.get_balance(&card_id), initial - payment);
         } else {
             let result = client.try_process_payment(&card_id, &payment, &merchant);
@@ -88,13 +86,12 @@ proptest! {
         let merchant = String::from_str(&env, "merchant");
 
         let card_id = client
-            .issue_card(&user, &initial, &CardType::Standard, &0u64)
-            .unwrap();
+            .issue_card(&user, &initial, &CardType::Standard, &0u64);
 
         let mut expected = initial;
         for p in &payments {
             if *p <= expected {
-                client.process_payment(&card_id, p, &merchant).unwrap();
+                client.process_payment(&card_id, p, &merchant);
                 expected -= p;
             }
         }
@@ -114,8 +111,7 @@ proptest! {
         let merchant = String::from_str(&env, "merchant");
 
         let card_id = client
-            .issue_card(&user, &initial, &CardType::Standard, &0u64)
-            .unwrap();
+            .issue_card(&user, &initial, &CardType::Standard, &0u64);
 
         let result = client.try_process_payment(&card_id, &bad_payment, &merchant);
         prop_assert!(result.is_err(), "non-positive payment amount must fail");
@@ -143,12 +139,11 @@ proptest! {
         let merchant = String::from_str(&env, "merchant");
 
         let card_id = client
-            .issue_card(&user, &amount, &CardType::Disposable, &0u64)
-            .unwrap();
+            .issue_card(&user, &amount, &CardType::Disposable, &0u64);
 
-        client.process_payment(&card_id, &amount, &merchant).unwrap();
+        client.process_payment(&card_id, &amount, &merchant);
 
-        let card = client.get_card(&card_id).unwrap();
+        let card = client.get_card(&card_id);
         prop_assert_eq!(card.status, CardStatus::Closed, "card must auto-close at zero balance");
         prop_assert_eq!(card.balance, 0i128);
 
@@ -166,12 +161,11 @@ proptest! {
         let merchant = String::from_str(&env, "merchant");
 
         let card_id = client
-            .issue_card(&user, &amount, &CardType::Standard, &0u64)
-            .unwrap();
+            .issue_card(&user, &amount, &CardType::Standard, &0u64);
 
-        client.suspend_card(&card_id, &user).unwrap();
+        client.suspend_card(&card_id, &user);
 
-        let card = client.get_card(&card_id).unwrap();
+        let card = client.get_card(&card_id);
         prop_assert_eq!(card.status, CardStatus::Suspended);
 
         let result = client.try_process_payment(&card_id, &1i128, &merchant);
@@ -189,12 +183,11 @@ proptest! {
         let reason = String::from_str(&env, "user_request");
 
         let card_id = client
-            .issue_card(&user, &amount, &CardType::Standard, &0u64)
-            .unwrap();
+            .issue_card(&user, &amount, &CardType::Standard, &0u64);
 
-        client.deactivate_card(&card_id, &user, &reason).unwrap();
+        client.deactivate_card(&card_id, &user, &reason);
 
-        let card = client.get_card(&card_id).unwrap();
+        let card = client.get_card(&card_id);
         prop_assert_eq!(card.status, CardStatus::Closed);
         prop_assert_eq!(card.balance, amount, "balance preserved after deactivation");
 
@@ -213,13 +206,12 @@ proptest! {
         let client = register_client(&env);
 
         let card_id = client
-            .issue_card(&user, &amount, &CardType::Standard, &0u64)
-            .unwrap();
+            .issue_card(&user, &amount, &CardType::Standard, &0u64);
 
         let result = client.try_suspend_card(&card_id, &attacker);
         prop_assert!(result.is_err(), "unauthorized suspend must fail");
 
-        let card = client.get_card(&card_id).unwrap();
+        let card = client.get_card(&card_id);
         prop_assert_eq!(card.status, CardStatus::Active, "status must be unchanged");
     }
 
@@ -233,13 +225,12 @@ proptest! {
         let reason = String::from_str(&env, "attack");
 
         let card_id = client
-            .issue_card(&user, &amount, &CardType::Standard, &0u64)
-            .unwrap();
+            .issue_card(&user, &amount, &CardType::Standard, &0u64);
 
         let result = client.try_deactivate_card(&card_id, &attacker, &reason);
         prop_assert!(result.is_err(), "unauthorized deactivation must fail");
 
-        let card = client.get_card(&card_id).unwrap();
+        let card = client.get_card(&card_id);
         prop_assert_eq!(card.status, CardStatus::Active);
     }
 
@@ -252,8 +243,7 @@ proptest! {
         let client = register_client(&env);
 
         let card_id = client
-            .issue_card(&user, &amount, &CardType::Standard, &0u64)
-            .unwrap();
+            .issue_card(&user, &amount, &CardType::Standard, &0u64);
 
         prop_assert!(client.verify_ownership(&card_id, &user), "holder must be verified");
         prop_assert!(!client.verify_ownership(&card_id, &stranger), "stranger must not be verified");
@@ -282,8 +272,8 @@ proptest! {
         }
     }
 
-    /// After expiry, process_payment must return Expired and transition the
-    /// card to Closed. Balance must not decrease (funds not lost).
+    /// After expiry, process_payment must return Expired and leave persisted
+    /// card state unchanged because the failing invocation rolls back.
     #[test]
     fn fuzz_payment_after_expiry_rejected(amount in 1i128..=1_000_000_000i128) {
         let (env, user) = fuzz_setup();
@@ -294,8 +284,7 @@ proptest! {
         let expires_at = now + 100u64;
 
         let card_id = client
-            .issue_card(&user, &amount, &CardType::Standard, &expires_at)
-            .unwrap();
+            .issue_card(&user, &amount, &CardType::Standard, &expires_at);
 
         // Advance ledger past expiry
         env.ledger().set_timestamp(expires_at + 1);
@@ -303,9 +292,9 @@ proptest! {
         let result = client.try_process_payment(&card_id, &1i128, &merchant);
         prop_assert!(result.is_err(), "payment after expiry must fail");
 
-        // Card must now be in Closed state
-        let card = client.get_card(&card_id).unwrap();
-        prop_assert_eq!(card.status, CardStatus::Closed);
+        // Failed invocations roll back, so the persisted card remains Active.
+        let card = client.get_card(&card_id);
+        prop_assert_eq!(card.status, CardStatus::Active);
     }
 
     // ── Card ID monotonicity ──────────────────────────────────────────────────
@@ -319,8 +308,7 @@ proptest! {
 
         for expected_id in 1..=n {
             let card_id = client
-                .issue_card(&user, &100i128, &CardType::Standard, &0u64)
-                .unwrap();
+                .issue_card(&user, &100i128, &CardType::Standard, &0u64);
             prop_assert_eq!(card_id, expected_id, "card IDs must be sequential from 1");
         }
     }
