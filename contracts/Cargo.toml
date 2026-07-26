@@ -13,6 +13,7 @@ members = [
   "contracts/allowance",
   "contracts/payment-adapter",
   "contracts/voucher-ledger",
+  "contracts/fee-collector",
 ]
 
 [workspace.dependencies]
