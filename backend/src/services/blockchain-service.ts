@@ -594,18 +594,34 @@ export class BlockchainService {
     args: xdr.ScVal[],
     subscriptionId?: string,
   ): Promise<{ transactionHash: string }> {
+    const correlationId = getRequestId();
+    
     if (!this.contractAddress) {
+      logger.error('Contract invocation failed: SOROBAN_CONTRACT_ADDRESS not configured', { 
+        method, 
+        correlationId 
+      });
       throw new Error("SOROBAN_CONTRACT_ADDRESS not configured");
     }
 
     // Honour the ENABLE_BLOCKCHAIN master switch
     const flags = getBlockchainFlags();
     if (!flags.blockchainEnabled) {
-      throw new Error(
-        `[blockchain] On-chain write for "${method}" was blocked: ` +
-          "ENABLE_BLOCKCHAIN is set to false.",
-      );
+      const errorMsg = `[blockchain] On-chain write for "${method}" was blocked: ENABLE_BLOCKCHAIN is set to false.`;
+      logger.warn('Contract invocation blocked by feature flag', { 
+        method, 
+        correlationId,
+        blockchainEnabled: flags.blockchainEnabled 
+      });
+      throw new Error(errorMsg);
     }
+
+    logger.info('Starting contract invocation', { 
+      method, 
+      subscriptionId, 
+      correlationId,
+      contractAddress: this.contractAddress 
+    });
 
     const rpc = new SorobanRpc.Server(this.rpcUrl);
     
@@ -669,6 +685,14 @@ export class BlockchainService {
           throw new Error(`Send failed: ${send.errorResult}`);
         }
 
+        logger.info('Contract transaction submitted', { 
+          method, 
+          transactionHash: send.hash, 
+          correlationId,
+          subscriptionId,
+          attempt: attempt + 1 
+        });
+
         // Wait for confirmation
         const getTx = await rpc.getTransaction(send.hash);
         if (getTx.status === "NOT_FOUND") {
@@ -688,6 +712,14 @@ export class BlockchainService {
           throw new Error(`Transaction memo verification failed for method ${method}`);
         }
 
+        logger.info('Contract transaction confirmed', { 
+          method, 
+          transactionHash: send.hash, 
+          correlationId,
+          subscriptionId,
+          status: getTx.status 
+        });
+
         return { transactionHash: send.hash };
       } catch (err) {
         lastErr = err;
@@ -695,16 +727,26 @@ export class BlockchainService {
         const delay = calculateBackoffDelay(attempt + 1, { initialDelay, maxDelay, multiplier, jitter });
         logger.warn('Soroban tx attempt failed', {
           method,
+          subscriptionId,
           attempt: attempt + 1,
           maxAttempts,
           reason,
           retryInMs: delay,
+          correlationId,
         });
         await this.sleep(delay);
       }
     }
 
     // After all retries failed, enqueue to DLQ if available
+    logger.error('Contract transaction failed after all retries', { 
+      method, 
+      subscriptionId, 
+      maxAttempts, 
+      correlationId,
+      error: lastErr instanceof Error ? lastErr.message : String(lastErr) 
+    });
+    
     await this.enqueueDeadLetter({
       version: '1.0',
       eventType: method,

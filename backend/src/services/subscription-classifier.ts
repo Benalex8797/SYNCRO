@@ -1,7 +1,5 @@
-'use strict';
-
 /**
- * subscription-classifier.js
+ * subscription-classifier.ts
  *
  * Hybrid classification pipeline:
  *   1. Rule-based lookup  → instant, zero-cost
@@ -9,11 +7,49 @@
  *   3. LLM (Claude Haiku) → flexible fallback for unknown services
  */
 
-const SERVICE_CATEGORIES = require('./service-categories');
+import type { SupabaseClient } from '@supabase/supabase-js';
+import SERVICE_CATEGORIES from './service-categories';
+import logger from '../src/config/logger';
+
+// ─── Types ─────────────────────────────────────────────────────────────────
+
+export type Category =
+  | 'entertainment'
+  | 'productivity'
+  | 'ai_tools'
+  | 'infrastructure'
+  | 'education'
+  | 'health'
+  | 'finance'
+  | 'other';
+
+export type Confidence = 'high' | 'medium' | 'low';
+
+export type ClassificationSource = 'rule_lookup' | 'cache' | 'llm';
+
+export interface ClassificationResult {
+  category: Category;
+  confidence: Confidence;
+  source: ClassificationSource;
+}
+
+export interface ClassifyServiceOptions {
+  serviceName: string;
+  serviceUrl?: string;
+  /** Supabase client (or any compatible DB client). */
+  supabase?: SupabaseClient | null;
+  /** Force LLM call, bypassing the DB cache (used for reclassify). */
+  skipCache?: boolean;
+}
+
+export interface CategorySuggestion {
+  suggestedCategory: Category | null;
+  source: 'rule_lookup';
+}
 
 // ─── Constants ───────────────────────────────────────────────────────────────
 
-const VALID_CATEGORIES = [
+export const VALID_CATEGORIES: readonly Category[] = [
   'entertainment',
   'productivity',
   'ai_tools',
@@ -24,25 +60,26 @@ const VALID_CATEGORIES = [
   'other',
 ];
 
-const LLM_MODEL   = 'claude-haiku-4-5-20251001';
+const LLM_MODEL = 'claude-haiku-4-5-20251001';
 const LLM_API_URL = 'https://api.anthropic.com/v1/messages';
+
+function isValidCategory(value: string): value is Category {
+  return (VALID_CATEGORIES as readonly string[]).includes(value);
+}
 
 // ─── Normalisation helper ─────────────────────────────────────────────────────
 
 /**
  * Normalise a service name for consistent lookups.
  * Strips punctuation that is unlikely to be meaningful, collapses whitespace.
- *
- * @param {string} name
- * @returns {string}
  */
-function normaliseServiceName(name) {
+export function normaliseServiceName(name: unknown): string {
   if (typeof name !== 'string') return '';
   return name
     .toLowerCase()
     .trim()
-    .replace(/\s+/g, ' ')          // collapse internal whitespace
-    .replace(/[™®©]/g, '')         // strip trademark symbols
+    .replace(/\s+/g, ' ') // collapse internal whitespace
+    .replace(/[™®©]/g, '') // strip trademark symbols
     .replace(/\s*[-–—]\s*plan$/i, '') // drop "- Plan" suffix
     .trim();
 }
@@ -51,14 +88,11 @@ function normaliseServiceName(name) {
 
 /**
  * Look up a service in the static lookup table.
- *
- * @param {string} serviceName
- * @returns {{ category: string, confidence: string, source: string } | null}
  */
-function ruleBasedLookup(serviceName) {
+export function ruleBasedLookup(serviceName: string): ClassificationResult | null {
   const key = normaliseServiceName(serviceName);
   const category = SERVICE_CATEGORIES[key];
-  if (!category) return null;
+  if (!category || !isValidCategory(category)) return null;
   return { category, confidence: 'high', source: 'rule_lookup' };
 }
 
@@ -67,11 +101,12 @@ function ruleBasedLookup(serviceName) {
 /**
  * Check whether a classification exists in the DB cache.
  *
- * @param {object} supabase   - Supabase client (or any compatible DB client)
- * @param {string} serviceName  - Already normalised
- * @returns {Promise<{ category: string, confidence: string, source: string } | null>}
+ * @param serviceName Already normalised.
  */
-async function checkDbCache(supabase, serviceName) {
+async function checkDbCache(
+  supabase: SupabaseClient,
+  serviceName: string,
+): Promise<ClassificationResult | null> {
   try {
     const { data, error } = await supabase
       .from('subscription_classifications')
@@ -80,7 +115,8 @@ async function checkDbCache(supabase, serviceName) {
       .single();
 
     if (error || !data) return null;
-    return { category: data.category, confidence: 'medium', source: 'cache' };
+    const category: Category = isValidCategory(data.category) ? data.category : 'other';
+    return { category, confidence: 'medium', source: 'cache' };
   } catch {
     return null;
   }
@@ -89,11 +125,13 @@ async function checkDbCache(supabase, serviceName) {
 /**
  * Persist an LLM classification result to the DB cache.
  *
- * @param {object} supabase
- * @param {string} serviceName - Already normalised
- * @param {string} category
+ * @param serviceName Already normalised.
  */
-async function saveToDbCache(supabase, serviceName, category) {
+async function saveToDbCache(
+  supabase: SupabaseClient,
+  serviceName: string,
+  category: Category,
+): Promise<void> {
   try {
     await supabase
       .from('subscription_classifications')
@@ -103,7 +141,8 @@ async function saveToDbCache(supabase, serviceName, category) {
       );
   } catch (err) {
     // Non-fatal — log but do not bubble
-    console.error('[classifier] Failed to cache classification:', err.message);
+    const message = err instanceof Error ? err.message : String(err);
+    logger.error('[classifier] Failed to cache classification', { error: message });
   }
 }
 
@@ -111,15 +150,14 @@ async function saveToDbCache(supabase, serviceName, category) {
 
 /**
  * Classify an unknown service using Claude Haiku.
- *
- * @param {string} serviceName
- * @param {string} [serviceUrl]
- * @returns {Promise<{ category: string, confidence: string, source: string }>}
  */
-async function llmClassify(serviceName, serviceUrl = '') {
+async function llmClassify(
+  serviceName: string,
+  serviceUrl = '',
+): Promise<ClassificationResult> {
   const apiKey = process.env.ANTHROPIC_API_KEY;
   if (!apiKey) {
-    console.warn('[classifier] ANTHROPIC_API_KEY not set — falling back to "other"');
+    logger.warn('[classifier] ANTHROPIC_API_KEY not set — falling back to "other"');
     return { category: 'other', confidence: 'low', source: 'llm' };
   }
 
@@ -162,16 +200,19 @@ Rules:
       throw new Error(`LLM API error ${response.status}: ${text}`);
     }
 
-    const data = await response.json();
-    const raw  = (data?.content?.[0]?.text ?? '').trim().toLowerCase();
+    const data = (await response.json()) as {
+      content?: Array<{ text?: string }>;
+    };
+    const raw = (data?.content?.[0]?.text ?? '').trim().toLowerCase();
 
     // Validate the returned category
-    const category = VALID_CATEGORIES.includes(raw) ? raw : 'other';
-    const confidence = category === 'other' ? 'low' : 'medium';
+    const category: Category = isValidCategory(raw) ? raw : 'other';
+    const confidence: Confidence = category === 'other' ? 'low' : 'medium';
 
     return { category, confidence, source: 'llm' };
   } catch (err) {
-    console.error('[classifier] LLM classification failed:', err.message);
+    const message = err instanceof Error ? err.message : String(err);
+    logger.error('[classifier] LLM classification failed', { error: message });
     return { category: 'other', confidence: 'low', source: 'llm' };
   }
 }
@@ -181,15 +222,13 @@ Rules:
 /**
  * Classify a subscription service through the full pipeline:
  *   rule lookup → DB cache → LLM
- *
- * @param {object} options
- * @param {string}  options.serviceName
- * @param {string}  [options.serviceUrl]
- * @param {object}  options.supabase     - Supabase client
- * @param {boolean} [options.skipCache]  - Force LLM call (used for reclassify)
- * @returns {Promise<{ category: string, confidence: string, source: string }>}
  */
-async function classifyService({ serviceName, serviceUrl = '', supabase, skipCache = false }) {
+export async function classifyService({
+  serviceName,
+  serviceUrl = '',
+  supabase,
+  skipCache = false,
+}: ClassifyServiceOptions): Promise<ClassificationResult> {
   if (!serviceName || typeof serviceName !== 'string') {
     return { category: 'other', confidence: 'low', source: 'rule_lookup' };
   }
@@ -211,7 +250,7 @@ async function classifyService({ serviceName, serviceUrl = '', supabase, skipCac
 
   // Persist to cache (fire-and-forget — we don't need to await)
   if (supabase) {
-    saveToDbCache(supabase, normalised, llmResult.category);
+    void saveToDbCache(supabase, normalised, llmResult.category);
   }
 
   return llmResult;
@@ -222,11 +261,8 @@ async function classifyService({ serviceName, serviceUrl = '', supabase, skipCac
 /**
  * Lightweight lookup for frontend suggestion chips.
  * Only uses the static table — no DB or LLM call.
- *
- * @param {string} partialName
- * @returns {{ suggestedCategory: string | null, source: string }}
  */
-function suggestCategory(partialName) {
+export function suggestCategory(partialName: string): CategorySuggestion {
   if (!partialName) return { suggestedCategory: null, source: 'rule_lookup' };
   const result = ruleBasedLookup(partialName);
   return {
@@ -234,11 +270,3 @@ function suggestCategory(partialName) {
     source: 'rule_lookup',
   };
 }
-
-module.exports = {
-  classifyService,
-  suggestCategory,
-  ruleBasedLookup,
-  normaliseServiceName,
-  VALID_CATEGORIES,
-};
