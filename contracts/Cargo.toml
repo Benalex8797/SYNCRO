@@ -19,6 +19,7 @@ members = [
   "contracts/recurring_allowance",
   "contracts/loyalty_rewards",
   "contracts/subscription_nft",
+  "contracts/attestation",
 ]
 
 [workspace.dependencies]
