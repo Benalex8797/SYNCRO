@@ -2,6 +2,7 @@
 use soroban_sdk::{
     contract, contractevent, contractimpl, contracttype, xdr::ToXdr, Address, Bytes, Env, IntoVal,
 };
+use subscription_logging::SubscriptionLoggingContractClient;
 
 /// Storage keys for contract-level state (admin, pause flag).
 #[contracttype]
@@ -528,19 +529,18 @@ impl SubscriptionRenewalContract {
     }
 
     fn record_log(env: &Env, sub_id: u64, event_type: u32, data_str: soroban_sdk::String) {
-        if let Some(_log_addr) = env
+        if let Some(log_addr) = env
             .storage()
             .instance()
             .get::<_, Address>(&ContractKey::LoggingContract)
         {
-            // Here we would call the logging contract.
-            // Since we are in a multi-contract setup, we'd use a client.
-            // For now, we'll emit an event as a placeholder or assume the client is available.
-            // (In a real implementation, we'd use a cross-contract call).
-            env.events().publish(
-                (soroban_sdk::symbol_short!("log"), sub_id),
-                (event_type, data_str),
+            let logging_client = SubscriptionLoggingContractClient::new(env, &log_addr);
+            let payload: Bytes = (sub_id, event_type, data_str).to_xdr(env);
+            let commitment_hash = soroban_sdk::BytesN::from_array(
+                env,
+                &env.crypto().sha256(&payload).to_array(),
             );
+            logging_client.record_commitment(&commitment_hash);
         }
     }
 
