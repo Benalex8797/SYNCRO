@@ -55,11 +55,32 @@ export async function deleteTag(tagId: string, userId: string): Promise<void> {
   if (error) throw new Error(`Failed to delete tag: ${error.message}`)
 }
 
-/** Fetch tag IDs assigned to a subscription. */
+/**
+ * Fetch tag IDs assigned to a subscription.
+ *
+ * Requires the authenticated user's id: ownership is validated against
+ * subscriptions.user_id before assignments are fetched, so this helper is
+ * safe to call from routes that have not performed their own ownership check.
+ * Throws if the subscription does not exist or belongs to another user.
+ */
 export async function getSubscriptionTagIds(
   subscriptionId: string,
+  userId: string,
 ): Promise<string[]> {
   const supabase = await createClient()
+
+  const { data: subscription, error: ownershipError } = await supabase
+    .from("subscriptions")
+    .select("id")
+    .eq("id", subscriptionId)
+    .eq("user_id", userId)
+    .maybeSingle()
+
+  if (ownershipError)
+    throw new Error(`Failed to verify subscription ownership: ${ownershipError.message}`)
+  if (!subscription)
+    throw new Error("Subscription not found for this user")
+
   const { data, error } = await supabase
     .from("subscription_tag_assignments")
     .select("tag_id")
