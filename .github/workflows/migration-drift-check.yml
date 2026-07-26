@@ -150,7 +150,7 @@ jobs:
     if: github.event_name == 'pull_request' && always()
     steps:
       - name: Download drift reports
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           pattern: drift-*-result
           merge-multiple: true
