@@ -1,7 +1,14 @@
 use soroban_sdk::{
-    contract, contractevent, contractimpl, contracttype, vec, xdr::ToXdr, Address, Bytes, BytesN, Env,
-    String, Vec,
+    contract, contractevent, contractimpl, contracttype, token, vec, xdr::ToXdr, Address, Bytes,
+    BytesN, Env, String, Vec,
 };
+
+/// Minimum billing interval: 1 day (seconds).
+const MIN_INTERVAL: u64 = 86_400;
+/// Maximum billing interval: 365 days (seconds).
+const MAX_INTERVAL: u64 = 31_536_000;
+/// Maximum payment amount accepted at registration.
+const MAX_AMOUNT: i128 = 1_000_000_000_000_000;
 
 #[contracttype]
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -47,6 +54,8 @@ pub struct Subscription {
 #[derive(Clone)]
 pub enum DataKey {
     UserSubscriptions(Address),
+    /// Maps a subscriber to core `Subscription` ids (persistent).
+    CoreUserSubscriptions(Address),
     MerchantSubscriptions(Address),
     Subscription(BytesN<32>),
     /// Core `Subscription` records keyed by subscription id.
@@ -90,11 +99,158 @@ pub struct SubscriptionCancelledEvent {
     pub service_id: String,
 }
 
+#[contractevent]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct SubscriptionRegisteredEvent {
+    pub subscription_id: BytesN<32>,
+    pub user: Address,
+    pub merchant: Address,
+    pub amount: i128,
+    pub interval: u64,
+    pub next_renewal_date: u64,
+}
+
 #[contract]
 pub struct SubscriptionRegistry;
 
 #[contractimpl]
 impl SubscriptionRegistry {
+    /// Register a new subscription and authorize the initial token allowance.
+    ///
+    /// The subscriber must authorize via `require_auth()`. Payment amount and
+    /// billing interval are validated against contract bounds before persistence.
+    pub fn register_subscription(
+        env: Env,
+        user: Address,
+        merchant: Address,
+        token: Address,
+        amount: i128,
+        interval: u64,
+    ) -> BytesN<32> {
+        user.require_auth();
+
+        if user == merchant {
+            panic!("user and merchant must differ");
+        }
+        if amount <= 0 || amount > MAX_AMOUNT {
+            panic!("amount out of bounds");
+        }
+        if interval < MIN_INTERVAL || interval > MAX_INTERVAL {
+            panic!("interval out of bounds");
+        }
+
+        let now = env.ledger().timestamp();
+        let next_renewal_date = now.checked_add(interval).expect("next_renewal_date overflow");
+
+        let counter: u64 = env
+            .storage()
+            .instance()
+            .get(&DataKey::CoreSubscriptionCounter)
+            .unwrap_or(0u64);
+        let new_counter = counter + 1;
+        env.storage()
+            .instance()
+            .set(&DataKey::CoreSubscriptionCounter, &new_counter);
+
+        let mut id_bytes = [0u8; 32];
+        let counter_bytes = counter.to_be_bytes();
+        let user_bytes = user.clone().to_xdr(&env);
+        id_bytes[..8].copy_from_slice(&counter_bytes);
+        let user_hash = env.crypto().sha256(&user_bytes);
+        id_bytes[8..32].copy_from_slice(&user_hash.to_array()[..24]);
+        // Distinguish core ids from metadata-based ids in the high nibble.
+        id_bytes[31] ^= 0xA5;
+        let subscription_id = BytesN::from_array(&env, &id_bytes);
+
+        let subscription = Subscription {
+            id: subscription_id.clone(),
+            user: user.clone(),
+            merchant: merchant.clone(),
+            token: token.clone(),
+            amount,
+            interval,
+            next_renewal_date,
+            created_at: now,
+            status: SubscriptionStatus::Active,
+            escrow_id: None,
+        };
+
+        env.storage()
+            .persistent()
+            .set(&DataKey::CoreSubscription(subscription_id.clone()), &subscription);
+
+        let mut user_subs: Vec<BytesN<32>> = env
+            .storage()
+            .persistent()
+            .get(&DataKey::CoreUserSubscriptions(user.clone()))
+            .unwrap_or_else(|| vec![&env]);
+        user_subs.push_back(subscription_id.clone());
+        env.storage()
+            .persistent()
+            .set(&DataKey::CoreUserSubscriptions(user.clone()), &user_subs);
+
+        let mut merchant_subs: Vec<BytesN<32>> = env
+            .storage()
+            .persistent()
+            .get(&DataKey::MerchantSubscriptions(merchant.clone()))
+            .unwrap_or_else(|| vec![&env]);
+        merchant_subs.push_back(subscription_id.clone());
+        env.storage()
+            .persistent()
+            .set(
+                &DataKey::MerchantSubscriptions(merchant.clone()),
+                &merchant_subs,
+            );
+
+        // Authorize the contract to pull the first renewal payment via SAC allowance.
+        let expiration_ledger = env.ledger().sequence().saturating_add(interval as u32);
+        let token_client = token::Client::new(&env, &token);
+        token_client.approve(
+            &user,
+            &env.current_contract_address(),
+            &amount,
+            &expiration_ledger,
+        );
+        env.storage()
+            .persistent()
+            .set(&DataKey::PendingAllowance(subscription_id.clone()), &amount);
+
+        SubscriptionRegisteredEvent {
+            subscription_id: subscription_id.clone(),
+            user,
+            merchant,
+            amount,
+            interval,
+            next_renewal_date,
+        }
+        .publish(&env);
+
+        subscription_id
+    }
+
+    /// Fetch a core `Subscription` by id.
+    pub fn get_core_subscription(env: Env, subscription_id: BytesN<32>) -> Option<Subscription> {
+        env.storage()
+            .persistent()
+            .get(&DataKey::CoreSubscription(subscription_id))
+    }
+
+    /// Subscription ids associated with a merchant.
+    pub fn get_merchant_subscriptions(env: Env, merchant: Address) -> Vec<BytesN<32>> {
+        env.storage()
+            .persistent()
+            .get(&DataKey::MerchantSubscriptions(merchant))
+            .unwrap_or_else(|| vec![&env])
+    }
+
+    /// Core subscription ids associated with a user.
+    pub fn get_core_user_subscriptions(env: Env, user: Address) -> Vec<BytesN<32>> {
+        env.storage()
+            .persistent()
+            .get(&DataKey::CoreUserSubscriptions(user))
+            .unwrap_or_else(|| vec![&env])
+    }
+
     /// Create a new subscription for a user
     pub fn create_subscription(
         env: Env,
