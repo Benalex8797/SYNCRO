@@ -14,12 +14,48 @@ pub struct SubscriptionMetadata {
     pub encrypted_data: Option<String>,
 }
 
+/// Lifecycle status for a registered subscription.
+#[contracttype]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum SubscriptionStatus {
+    Active,
+    Canceled,
+    Expired,
+}
+
+/// Core on-chain subscription record.
+///
+/// Tracks the subscription identity, parties, billing parameters, and
+/// renewal schedule required for registration, renewal, and cancellation.
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct Subscription {
+    pub id: BytesN<32>,
+    pub user: Address,
+    pub merchant: Address,
+    pub token: Address,
+    pub amount: i128,
+    pub interval: u64,
+    pub next_renewal_date: u64,
+    pub created_at: u64,
+    pub status: SubscriptionStatus,
+    /// Optional linked escrow id used for pending funds cleanup on cancel.
+    pub escrow_id: Option<u64>,
+}
+
 #[contracttype]
 #[derive(Clone)]
 pub enum DataKey {
     UserSubscriptions(Address),
+    MerchantSubscriptions(Address),
     Subscription(BytesN<32>),
+    /// Core `Subscription` records keyed by subscription id.
+    CoreSubscription(BytesN<32>),
     SubscriptionCounter,
+    CoreSubscriptionCounter,
+    Admin,
+    /// Tracks whether a pending token allowance remains for a subscription.
+    PendingAllowance(BytesN<32>),
 }
 
 #[contractevent]
