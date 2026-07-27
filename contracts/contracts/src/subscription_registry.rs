@@ -9,6 +9,8 @@ const MIN_INTERVAL: u64 = 86_400;
 const MAX_INTERVAL: u64 = 31_536_000;
 /// Maximum payment amount accepted at registration.
 const MAX_AMOUNT: i128 = 1_000_000_000_000_000;
+/// Grace period after `next_renewal_date` during which renewal is allowed.
+const RENEWAL_WINDOW: u64 = 604_800; // 7 days
 
 #[contracttype]
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -107,6 +109,16 @@ pub struct SubscriptionRegisteredEvent {
     pub merchant: Address,
     pub amount: i128,
     pub interval: u64,
+    pub next_renewal_date: u64,
+}
+
+#[contractevent]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct SubscriptionRenewedEvent {
+    pub subscription_id: BytesN<32>,
+    pub user: Address,
+    pub merchant: Address,
+    pub amount: i128,
     pub next_renewal_date: u64,
 }
 
@@ -226,6 +238,66 @@ impl SubscriptionRegistry {
         .publish(&env);
 
         subscription_id
+    }
+
+    /// Renew an active subscription when the ledger timestamp is inside the
+    /// allowed renewal window. Transfers `amount` from the subscriber to the
+    /// merchant via the Stellar Asset Contract, then advances `next_renewal_date`.
+    pub fn renew_subscription(env: Env, subscription_id: BytesN<32>) {
+        let mut subscription: Subscription = env
+            .storage()
+            .persistent()
+            .get(&DataKey::CoreSubscription(subscription_id.clone()))
+            .unwrap_or_else(|| panic!("subscription not found"));
+
+        if subscription.status != SubscriptionStatus::Active {
+            panic!("subscription is not active");
+        }
+
+        let now = env.ledger().timestamp();
+        if now < subscription.next_renewal_date {
+            panic!("renewal window has not opened");
+        }
+        let window_end = subscription
+            .next_renewal_date
+            .checked_add(RENEWAL_WINDOW)
+            .expect("renewal window overflow");
+        if now > window_end {
+            panic!("renewal window has closed");
+        }
+
+        // Pull funds from subscriber to merchant through the SAC.
+        let token_client = token::Client::new(&env, &subscription.token);
+        token_client.transfer_from(
+            &env.current_contract_address(),
+            &subscription.user,
+            &subscription.merchant,
+            &subscription.amount,
+        );
+
+        // Initial allowance from registration has been consumed.
+        env.storage()
+            .persistent()
+            .remove(&DataKey::PendingAllowance(subscription_id.clone()));
+
+        subscription.next_renewal_date = subscription
+            .next_renewal_date
+            .checked_add(subscription.interval)
+            .expect("next_renewal_date overflow");
+
+        env.storage().persistent().set(
+            &DataKey::CoreSubscription(subscription_id.clone()),
+            &subscription,
+        );
+
+        SubscriptionRenewedEvent {
+            subscription_id,
+            user: subscription.user,
+            merchant: subscription.merchant,
+            amount: subscription.amount,
+            next_renewal_date: subscription.next_renewal_date,
+        }
+        .publish(&env);
     }
 
     /// Fetch a core `Subscription` by id.
