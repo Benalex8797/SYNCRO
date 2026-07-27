@@ -20,6 +20,7 @@ pub struct SubscriptionMetadata {
     pub expected_amount: i128,
     pub next_renewal: u64,
     pub is_active: bool,
+    pub encrypted_blob: Bytes,
     pub encrypted_data: Option<String>,
 }
 
@@ -127,6 +128,23 @@ pub struct SubscriptionRegistry;
 
 #[contractimpl]
 impl SubscriptionRegistry {
+    /// Set the contract admin. Callable once.
+    pub fn init_admin(env: Env, admin: Address) {
+        if env.storage().instance().has(&DataKey::Admin) {
+            panic!("admin already initialized");
+        }
+        admin.require_auth();
+        env.storage().instance().set(&DataKey::Admin, &admin);
+    }
+
+    fn is_admin(env: &Env, caller: &Address) -> bool {
+        env.storage()
+            .instance()
+            .get::<_, Address>(&DataKey::Admin)
+            .map(|admin| &admin == caller)
+            .unwrap_or(false)
+    }
+
     /// Register a new subscription and authorize the initial token allowance.
     ///
     /// The subscriber must authorize via `require_auth()`. Payment amount and
@@ -384,6 +402,7 @@ impl SubscriptionRegistry {
             expected_amount,
             next_renewal,
             is_active: true,
+            encrypted_blob: encrypted_blob.clone(),
             encrypted_data: None,
         };
         env.storage()
@@ -472,9 +491,68 @@ impl SubscriptionRegistry {
         .publish(&env);
     }
 
-    /// Cancel a subscription by marking it as inactive
-    pub fn cancel_subscription(env: Env, subscription_id: BytesN<32>, user: Address) {
-        user.require_auth();
+    /// Cancel a subscription.
+    ///
+    /// Only the subscriber or the contract admin may cancel. Core subscriptions
+    /// move to `SubscriptionStatus::Canceled` and drop pending allowance /
+    /// escrow linkage. Legacy metadata subscriptions are marked inactive.
+    pub fn cancel_subscription(env: Env, subscription_id: BytesN<32>, caller: Address) {
+        caller.require_auth();
+
+        if let Some(mut subscription) = env
+            .storage()
+            .persistent()
+            .get::<_, Subscription>(&DataKey::CoreSubscription(subscription_id.clone()))
+        {
+            let authorized =
+                caller == subscription.user || Self::is_admin(&env, &caller);
+            if !authorized {
+                panic!("unauthorized cancellation");
+            }
+            if subscription.status == SubscriptionStatus::Canceled {
+                panic!("subscription already canceled");
+            }
+
+            subscription.status = SubscriptionStatus::Canceled;
+
+            // Clean up tracked allowance. When the subscriber cancels, also
+            // revoke the SAC allowance so third parties cannot pull funds.
+            if env
+                .storage()
+                .persistent()
+                .has(&DataKey::PendingAllowance(subscription_id.clone()))
+            {
+                if caller == subscription.user {
+                    let token_client = token::Client::new(&env, &subscription.token);
+                    token_client.approve(
+                        &subscription.user,
+                        &env.current_contract_address(),
+                        &0,
+                        &env.ledger().sequence(),
+                    );
+                }
+                env.storage()
+                    .persistent()
+                    .remove(&DataKey::PendingAllowance(subscription_id.clone()));
+            }
+
+            // Drop any linked escrow reference so canceled subs cannot settle.
+            subscription.escrow_id = None;
+
+            env.storage().persistent().set(
+                &DataKey::CoreSubscription(subscription_id.clone()),
+                &subscription,
+            );
+
+            SubscriptionCancelledEvent {
+                subscription_id,
+                user: subscription.user,
+                service_id: String::from_str(&env, "core"),
+            }
+            .publish(&env);
+            return;
+        }
+
         let mut metadata: SubscriptionMetadata = env
             .storage()
             .instance()
@@ -492,7 +570,7 @@ impl SubscriptionRegistry {
 
         SubscriptionCancelledEvent {
             subscription_id: subscription_id.clone(),
-            user: user.clone(),
+            user: caller,
             service_id: metadata.service_id.clone(),
         }
         .publish(&env);
@@ -531,5 +609,148 @@ impl SubscriptionRegistry {
             .instance()
             .get(&DataKey::UserSubscriptions(user))
             .unwrap_or_else(|| vec![&env])
+    }
+}
+
+#[cfg(test)]
+mod test {
+    use super::*;
+    use soroban_sdk::{
+        testutils::{Address as _, Ledger},
+        token::{StellarAssetClient, TokenClient},
+    };
+
+    fn setup_token(env: &Env) -> (Address, Address, Address, TokenClient<'static>) {
+        let admin = Address::generate(env);
+        let user = Address::generate(env);
+        let merchant = Address::generate(env);
+        let sac = env.register_stellar_asset_contract_v2(admin.clone());
+        let token = TokenClient::new(env, &sac.address());
+        let asset = StellarAssetClient::new(env, &sac.address());
+        asset.mint(&user, &1_000_000_000i128);
+        (user, merchant, sac.address(), token)
+    }
+
+    #[test]
+    fn register_persists_active_subscription() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let contract_id = env.register(SubscriptionRegistry, ());
+        let client = SubscriptionRegistryClient::new(&env, &contract_id);
+        let (user, merchant, token, _) = setup_token(&env);
+
+        let interval = MIN_INTERVAL;
+        let amount = 1_000i128;
+        let id = client.register_subscription(&user, &merchant, &token, &amount, &interval);
+
+        let sub = client.get_core_subscription(&id).unwrap();
+        assert_eq!(sub.status, SubscriptionStatus::Active);
+        assert_eq!(sub.amount, amount);
+        assert_eq!(sub.interval, interval);
+        assert_eq!(sub.user, user);
+        assert_eq!(sub.merchant, merchant);
+        assert_eq!(client.get_core_user_subscriptions(&user).len(), 1);
+        assert_eq!(client.get_merchant_subscriptions(&merchant).len(), 1);
+    }
+
+    #[test]
+    #[should_panic(expected = "amount out of bounds")]
+    fn register_rejects_invalid_amount() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let contract_id = env.register(SubscriptionRegistry, ());
+        let client = SubscriptionRegistryClient::new(&env, &contract_id);
+        let (user, merchant, token, _) = setup_token(&env);
+        client.register_subscription(&user, &merchant, &token, &0i128, &MIN_INTERVAL);
+    }
+
+    #[test]
+    fn renew_transfers_and_advances_next_renewal() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let contract_id = env.register(SubscriptionRegistry, ());
+        let client = SubscriptionRegistryClient::new(&env, &contract_id);
+        let (user, merchant, token, token_client) = setup_token(&env);
+
+        let interval = MIN_INTERVAL;
+        let amount = 5_000i128;
+        let id = client.register_subscription(&user, &merchant, &token, &amount, &interval);
+        let before = client.get_core_subscription(&id).unwrap();
+
+        env.ledger().with_mut(|li| {
+            li.timestamp = before.next_renewal_date;
+        });
+
+        let merchant_before = token_client.balance(&merchant);
+        client.renew_subscription(&id);
+        let after = client.get_core_subscription(&id).unwrap();
+
+        assert_eq!(token_client.balance(&merchant), merchant_before + amount);
+        assert_eq!(
+            after.next_renewal_date,
+            before.next_renewal_date + interval
+        );
+        assert_eq!(after.status, SubscriptionStatus::Active);
+    }
+
+    #[test]
+    #[should_panic(expected = "renewal window has not opened")]
+    fn renew_rejects_early_attempt() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let contract_id = env.register(SubscriptionRegistry, ());
+        let client = SubscriptionRegistryClient::new(&env, &contract_id);
+        let (user, merchant, token, _) = setup_token(&env);
+        let id =
+            client.register_subscription(&user, &merchant, &token, &1_000i128, &MIN_INTERVAL);
+        client.renew_subscription(&id);
+    }
+
+    #[test]
+    fn cancel_by_subscriber_sets_canceled_and_clears_allowance() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let contract_id = env.register(SubscriptionRegistry, ());
+        let client = SubscriptionRegistryClient::new(&env, &contract_id);
+        let (user, merchant, token, _) = setup_token(&env);
+        let id =
+            client.register_subscription(&user, &merchant, &token, &1_000i128, &MIN_INTERVAL);
+
+        client.cancel_subscription(&id, &user);
+        let sub = client.get_core_subscription(&id).unwrap();
+        assert_eq!(sub.status, SubscriptionStatus::Canceled);
+        assert!(sub.escrow_id.is_none());
+    }
+
+    #[test]
+    fn cancel_by_admin_succeeds() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let contract_id = env.register(SubscriptionRegistry, ());
+        let client = SubscriptionRegistryClient::new(&env, &contract_id);
+        let admin = Address::generate(&env);
+        client.init_admin(&admin);
+
+        let (user, merchant, token, _) = setup_token(&env);
+        let id =
+            client.register_subscription(&user, &merchant, &token, &1_000i128, &MIN_INTERVAL);
+
+        client.cancel_subscription(&id, &admin);
+        let sub = client.get_core_subscription(&id).unwrap();
+        assert_eq!(sub.status, SubscriptionStatus::Canceled);
+    }
+
+    #[test]
+    #[should_panic(expected = "unauthorized cancellation")]
+    fn cancel_by_third_party_fails() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let contract_id = env.register(SubscriptionRegistry, ());
+        let client = SubscriptionRegistryClient::new(&env, &contract_id);
+        let (user, merchant, token, _) = setup_token(&env);
+        let id =
+            client.register_subscription(&user, &merchant, &token, &1_000i128, &MIN_INTERVAL);
+        let stranger = Address::generate(&env);
+        client.cancel_subscription(&id, &stranger);
     }
 }
