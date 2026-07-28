@@ -1,8 +1,8 @@
 #![no_std]
+#![allow(deprecated)]
 
 use soroban_sdk::{
-    contract, contractimpl, contracterror, contracttype,
-    Address, Env, Map, String, Symbol,
+    contract, contracterror, contractimpl, contracttype, Address, Env, String, Symbol,
 };
 
 // ============================================================================
@@ -209,7 +209,10 @@ impl VirtualCardContract {
         env.storage().instance().set(&DataKey::TxCounter, &tx_id);
 
         env.events().publish(
-            (Symbol::new(&env, "payment_processed"), Symbol::new(&env, "card")),
+            (
+                Symbol::new(&env, "payment_processed"),
+                Symbol::new(&env, "card"),
+            ),
             (card_id, amount, merchant, current_ts),
         );
 
@@ -232,11 +235,7 @@ impl VirtualCardContract {
 
     /// Activate a pending card. Caller must be the card holder.
     /// Emits a `card_activated` event.
-    pub fn activate_card(
-        env: Env,
-        card_id: u32,
-        caller: Address,
-    ) -> Result<(), VirtualCardError> {
+    pub fn activate_card(env: Env, card_id: u32, caller: Address) -> Result<(), VirtualCardError> {
         caller.require_auth();
 
         let mut card: Card = env
@@ -292,7 +291,10 @@ impl VirtualCardContract {
             .set(&DataKey::CardMeta(card_id), &card);
 
         env.events().publish(
-            (Symbol::new(&env, "card_deactivated"), Symbol::new(&env, "card")),
+            (
+                Symbol::new(&env, "card_deactivated"),
+                Symbol::new(&env, "card"),
+            ),
             (card_id, reason, env.ledger().timestamp()),
         );
 
@@ -300,11 +302,7 @@ impl VirtualCardContract {
     }
 
     /// Temporarily suspend a card. Caller must be the card holder.
-    pub fn suspend_card(
-        env: Env,
-        card_id: u32,
-        caller: Address,
-    ) -> Result<(), VirtualCardError> {
+    pub fn suspend_card(env: Env, card_id: u32, caller: Address) -> Result<(), VirtualCardError> {
         caller.require_auth();
 
         let mut card: Card = env
@@ -388,8 +386,7 @@ mod tests {
         let contract_id = env.register(VirtualCardContract, ());
         let client = VirtualCardContractClient::new(&env, &contract_id);
 
-        let card_id = client
-            .issue_card(&user, &1000_i128, &CardType::Standard, &0_u64);
+        let card_id = client.issue_card(&user, &1000_i128, &CardType::Standard, &0_u64);
 
         assert_eq!(card_id, 1);
         assert_eq!(client.get_balance(&card_id), 1000_i128);
@@ -411,11 +408,9 @@ mod tests {
         let contract_id = env.register(VirtualCardContract, ());
         let client = VirtualCardContractClient::new(&env, &contract_id);
 
-        let card_id = client
-            .issue_card(&user, &500_i128, &CardType::Standard, &0_u64);
+        let card_id = client.issue_card(&user, &500_i128, &CardType::Standard, &0_u64);
 
-        client
-            .process_payment(&card_id, &200_i128, &String::from_str(&env, "merchant_a"));
+        client.process_payment(&card_id, &200_i128, &String::from_str(&env, "merchant_a"));
 
         assert_eq!(client.get_balance(&card_id), 300_i128);
     }
@@ -426,15 +421,33 @@ mod tests {
         let contract_id = env.register(VirtualCardContract, ());
         let client = VirtualCardContractClient::new(&env, &contract_id);
 
-        let card_id = client
-            .issue_card(&user, &100_i128, &CardType::Standard, &0_u64);
+        let card_id = client.issue_card(&user, &100_i128, &CardType::Standard, &0_u64);
 
-        let result = client.try_process_payment(
-            &card_id,
-            &200_i128,
-            &String::from_str(&env, "merchant_b"),
-        );
+        let result =
+            client.try_process_payment(&card_id, &200_i128, &String::from_str(&env, "merchant_b"));
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_suspended_card_cannot_process_payment() {
+        let (env, user) = setup();
+        let contract_id = env.register(VirtualCardContract, ());
+        let client = VirtualCardContractClient::new(&env, &contract_id);
+
+        let card_id = client.issue_card(&user, &100_i128, &CardType::Standard, &0_u64);
+
+        // Suspend the card as the holder
+        client.suspend_card(&card_id, &user);
+
+        // Attempt to process a payment from a suspended card
+        let res = client.try_process_payment(
+            &card_id,
+            &50_i128,
+            &String::from_str(&env, "merchant_suspended"),
+        );
+
+        // Expect the specific typed error for inactive/suspended cards
+        assert_eq!(res, Err(Ok(VirtualCardError::CardInactive)));
     }
 
     #[test]
@@ -443,11 +456,9 @@ mod tests {
         let contract_id = env.register(VirtualCardContract, ());
         let client = VirtualCardContractClient::new(&env, &contract_id);
 
-        let card_id = client
-            .issue_card(&user, &100_i128, &CardType::Disposable, &0_u64);
+        let card_id = client.issue_card(&user, &100_i128, &CardType::Disposable, &0_u64);
 
-        client
-            .process_payment(&card_id, &100_i128, &String::from_str(&env, "merchant_c"));
+        client.process_payment(&card_id, &100_i128, &String::from_str(&env, "merchant_c"));
 
         let card = client.get_card(&card_id);
         assert_eq!(card.status, CardStatus::Closed);
@@ -460,8 +471,7 @@ mod tests {
         let contract_id = env.register(VirtualCardContract, ());
         let client = VirtualCardContractClient::new(&env, &contract_id);
 
-        let card_id = client
-            .issue_card(&user, &100_i128, &CardType::Standard, &0_u64);
+        let card_id = client.issue_card(&user, &100_i128, &CardType::Standard, &0_u64);
 
         assert!(client.verify_ownership(&card_id, &user));
         assert!(!client.verify_ownership(&card_id, &other));
@@ -473,11 +483,9 @@ mod tests {
         let contract_id = env.register(VirtualCardContract, ());
         let client = VirtualCardContractClient::new(&env, &contract_id);
 
-        let card_id = client
-            .issue_card(&user, &100_i128, &CardType::Standard, &0_u64);
+        let card_id = client.issue_card(&user, &100_i128, &CardType::Standard, &0_u64);
 
-        client
-            .deactivate_card(&card_id, &user, &String::from_str(&env, "user_request"));
+        client.deactivate_card(&card_id, &user, &String::from_str(&env, "user_request"));
 
         let card = client.get_card(&card_id);
         assert_eq!(card.status, CardStatus::Closed);
@@ -490,14 +498,10 @@ mod tests {
         let contract_id = env.register(VirtualCardContract, ());
         let client = VirtualCardContractClient::new(&env, &contract_id);
 
-        let card_id = client
-            .issue_card(&user, &100_i128, &CardType::Standard, &0_u64);
+        let card_id = client.issue_card(&user, &100_i128, &CardType::Standard, &0_u64);
 
-        let result = client.try_deactivate_card(
-            &card_id,
-            &attacker,
-            &String::from_str(&env, "attack"),
-        );
+        let result =
+            client.try_deactivate_card(&card_id, &attacker, &String::from_str(&env, "attack"));
         assert!(result.is_err());
     }
 
@@ -507,8 +511,7 @@ mod tests {
         let contract_id = env.register(VirtualCardContract, ());
         let client = VirtualCardContractClient::new(&env, &contract_id);
 
-        let card_id = client
-            .issue_card(&user, &100_i128, &CardType::Standard, &0_u64);
+        let card_id = client.issue_card(&user, &100_i128, &CardType::Standard, &0_u64);
 
         assert!(client.can_transact(&card_id, &50_i128));
         assert!(!client.can_transact(&card_id, &150_i128));
