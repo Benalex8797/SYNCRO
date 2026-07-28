@@ -198,6 +198,12 @@
                   },
                   {
                     "key": {
+                      "symbol": "escrow_expires_at"
+                    },
+                    "val": "void"
+                  },
+                  {
+                    "key": {
                       "symbol": "escrow_id"
                     },
                     "val": "void"
