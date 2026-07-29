@@ -95,6 +95,33 @@ pub struct RenewalSuccess {
     pub owner: Address,
 }
 
+/// Off-chain-indexing events for the subscription lifecycle. These follow the
+   /// two-part (family, action) topic convention documented in
+   /// docs/contract-event-schema.md, joining "subscription" as a canonical family
+   /// alongside "escrow", "channel", etc.
+   #[contractevent]
+   pub struct SubscriptionCreated {
+       pub sub_id: u64,
+       pub owner: Address,
+       pub merchant: Address,
+       pub amount: i128,
+       pub frequency: u64,
+   }
+
+   #[contractevent]
+   pub struct SubscriptionRenewed {
+       pub sub_id: u64,
+       pub owner: Address,
+       pub merchant: Address,
+       pub amount: i128,
+   }
+
+   #[contractevent]
+   pub struct SubscriptionCanceled {
+       pub sub_id: u64,
+       pub owner: Address,
+   }
+
 #[contractevent]
    pub struct EscrowLocked {
        pub sub_id: u64,
@@ -501,6 +528,15 @@ impl SubscriptionRenewalContract {
             2,
             soroban_sdk::String::from_str(&env, "Subscription initialized"),
         );
+        // Emit indexer-facing lifecycle event
+       SubscriptionCreated {
+           sub_id,
+           owner: data.owner.clone(),
+           merchant: data.merchant.clone(),
+           amount: data.amount,
+           frequency: data.frequency,
+       }
+       .publish(&env);
     }
 
     fn record_log(env: &Env, sub_id: u64, event_type: u32, data_str: soroban_sdk::String) {
@@ -562,6 +598,13 @@ impl SubscriptionRenewalContract {
             5,
             soroban_sdk::String::from_str(&env, "Subscription cancelled"),
         );
+
+        // Emit indexer-facing lifecycle event
+       SubscriptionCanceled {
+           sub_id,
+           owner: data.owner.clone(),
+       }
+       .publish(&env);
 
         // Emit state transition event
         StateTransition {
@@ -885,6 +928,15 @@ impl SubscriptionRenewalContract {
             }
             .publish(&env);
 
+        // Emit indexer-facing lifecycle event
+       SubscriptionRenewed {
+           sub_id,
+           owner: data.owner.clone(),
+           merchant: data.merchant.clone(),
+           amount,
+       }
+       .publish(&env);
+
             // Record renewal success log
             Self::record_log(
                 &env,
@@ -894,6 +946,8 @@ impl SubscriptionRenewalContract {
             );
 
             true
+
+            
         } else {
             // Simulated failure - renewal failed, apply retry logic
             // Do NOT store cycle_id on failure — retries with same cycle_id remain allowed
