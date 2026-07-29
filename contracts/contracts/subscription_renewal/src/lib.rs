@@ -1,17 +1,19 @@
 #![no_std]
 use soroban_sdk::{
-    contract, contractevent, contractimpl, contracttype, xdr::ToXdr, Address, Bytes, Env, IntoVal,
-};
+       contract, contractevent, contractimpl, contracttype, token, xdr::ToXdr, Address, Bytes, Env,
+       IntoVal,
+   };
 use subscription_logging::SubscriptionLoggingContractClient;
 
 /// Storage keys for contract-level state (admin, pause flag).
 #[contracttype]
 #[derive(Clone)]
 enum ContractKey {
-    Admin,
-    Paused,
-    LoggingContract,
-}
+       Admin,
+       Paused,
+       LoggingContract,
+       TokenContract,
+   }
 
 /// Tagged persistent storage keys.
 #[contracttype]
@@ -28,6 +30,8 @@ enum PersistentKey {
     MultiSig(u64, u64),
     TeamThreshold(u64),
     SigningWindow(u64),
+       /// Escrowed balance awaiting merchant claim, keyed by subscription id.
+    EscrowBalance(u64),
 }
 
 /// Data stored for an active renewal lock
@@ -90,6 +94,21 @@ pub struct RenewalSuccess {
     pub sub_id: u64,
     pub owner: Address,
 }
+
+#[contractevent]
+   pub struct EscrowLocked {
+       pub sub_id: u64,
+       pub merchant: Address,
+       pub amount: i128,
+       pub total_escrowed: i128,
+   }
+
+   #[contractevent]
+   pub struct EscrowClaimed {
+       pub sub_id: u64,
+       pub merchant: Address,
+       pub amount: i128,
+   }
 
 #[contractevent]
 pub struct RenewalFailed {
@@ -333,6 +352,19 @@ impl SubscriptionRenewalContract {
             .instance()
             .set(&ContractKey::LoggingContract, &address);
     }
+
+    /// Set the token (asset) contract used to move funds into/out of escrow. Admin only.
+       pub fn set_token_contract(env: Env, address: Address) {
+           Self::require_admin(&env);
+           env.storage()
+               .instance()
+               .set(&ContractKey::TokenContract, &address);
+       }
+
+       /// Query the configured token contract address, if any.
+       pub fn get_token_contract(env: Env) -> Option<Address> {
+           env.storage().instance().get(&ContractKey::TokenContract)
+       }
 
     // ── Renewal lock management ────────────────────────────────────
 
@@ -790,8 +822,32 @@ impl SubscriptionRenewalContract {
                 sub_id,
                 owner: data.owner.clone(),
             }
+
             .publish(&env);
 
+            // Lock the renewal payment in escrow (this contract's own address)
+       // until the merchant claims it via `claim_escrow`.
+       if let Some(token_addr) = Self::get_token_contract(env.clone()) {
+           let token_client = token::Client::new(&env, &token_addr);
+           token_client.transfer(&data.owner, &env.current_contract_address(), &amount);
+
+           let escrow_key = PersistentKey::EscrowBalance(sub_id);
+           let existing: i128 = env
+               .storage()
+               .persistent()
+               .get(&escrow_key)
+               .unwrap_or(0);
+           let total_escrowed = existing + amount;
+           env.storage().persistent().set(&escrow_key, &total_escrowed);
+
+           EscrowLocked {
+               sub_id,
+               merchant: data.merchant.clone(),
+               amount,
+               total_escrowed,
+           }
+           .publish(&env);
+       }
             // Update lifecycle timestamps
             let lc_key = PersistentKey::Lifecycle(sub_id);
             let mut lifecycle: LifecycleTimestamps = env
@@ -898,6 +954,51 @@ impl SubscriptionRenewalContract {
             false
         }
     }
+
+    /// Query the amount currently escrowed for a subscription, awaiting merchant claim.
+       pub fn get_escrow_balance(env: Env, sub_id: u64) -> i128 {
+           env.storage()
+               .persistent()
+               .get(&PersistentKey::EscrowBalance(sub_id))
+               .unwrap_or(0)
+       }
+
+       /// Claim the escrowed balance for a subscription. Only the merchant on record
+       /// for that subscription may call this. Transfers the full escrowed amount
+       /// from the contract's custody to the merchant and zeroes the balance.
+       pub fn claim_escrow(env: Env, sub_id: u64) -> i128 {
+           let key = PersistentKey::Subscription(sub_id);
+           let data: SubscriptionData = env
+               .storage()
+               .persistent()
+               .get(&key)
+               .expect("Subscription not found");
+
+           // Only the merchant registered on this subscription can claim its escrow.
+           data.merchant.require_auth();
+
+           let escrow_key = PersistentKey::EscrowBalance(sub_id);
+           let balance: i128 = env.storage().persistent().get(&escrow_key).unwrap_or(0);
+           if balance <= 0 {
+               panic!("No escrowed balance to claim");
+           }
+
+           let token_addr: Address = Self::get_token_contract(env.clone())
+               .expect("Token contract not configured");
+           let token_client = token::Client::new(&env, &token_addr);
+           token_client.transfer(&env.current_contract_address(), &data.merchant, &balance);
+
+           env.storage().persistent().set(&escrow_key, &0i128);
+
+           EscrowClaimed {
+               sub_id,
+               merchant: data.merchant.clone(),
+               amount: balance,
+           }
+           .publish(&env);
+
+           balance
+       }
 
     pub fn get_sub(env: Env, sub_id: u64) -> SubscriptionData {
         env.storage()
