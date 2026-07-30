@@ -34,6 +34,7 @@ export interface PaymentResult {
   error?: string
   requiresAction?: boolean
   actionUrl?: string
+  clientSecret?: string
   /** Provider succeeded but local DB write failed */
   persistenceDegraded?: boolean
   /** Caller/ops should enqueue or await webhook reconciliation */
@@ -206,9 +207,28 @@ export class PaymentService {
         },
       })
 
-      return {
-        success: paymentIntent.status === "succeeded",
-        transactionId: paymentIntent.id,
+      switch (paymentIntent.status) {
+        case "succeeded":
+          return {
+            success: true,
+            transactionId: paymentIntent.id,
+          }
+
+        case "requires_action":
+        case "requires_confirmation":
+          return {
+            success: true,
+            transactionId: paymentIntent.id,
+            requiresAction: true,
+            clientSecret: paymentIntent.client_secret ?? undefined,
+          }
+
+        default:
+          return {
+            success: false,
+            transactionId: paymentIntent.id,
+            error: `Payment ${paymentIntent.status}`,
+          }
       }
     } catch (error: unknown) {
       return {
