@@ -23,6 +23,7 @@ members = [
   "contracts/guardian",
   "contracts/fx-oracle",
   "contracts/payment-splitter",
+  "contracts/stealth-announcement",
   "integration_tests",
 ]
 
