@@ -1,12 +1,12 @@
 "use client";
 
 import { useState, useEffect, Suspense, useCallback } from "react";
+import dynamic from "next/dynamic";
 import WelcomePage from "@/components/pages/welcome";
 import EnterpriseSetup from "@/components/pages/enterprise-setup";
 import DashboardPage from "@/components/pages/dashboard";
 import LandingAuth from "@/components/pages/landing-auth";
 import SubscriptionsPage from "@/components/pages/subscriptions";
-import AnalyticsPage from "@/components/pages/analytics";
 import IntegrationsPage from "@/components/pages/integrations";
 import SettingsPage from "@/components/pages/settings";
 import TeamsPage from "@/components/pages/teams";
@@ -18,7 +18,7 @@ import ManageSubscriptionModal from "@/components/modals/manage-subscription-mod
 import InsightsModal from "@/components/modals/insights-modal";
 import InsightsPage from "@/components/pages/insights";
 import EditSubscriptionModal from "@/components/modals/edit-subscription-modal";
-import { OnboardingTourEnhanced, useOnboardingTourEnhanced } from "@/components/onboarding-tour-enhanced";
+import { useOnboardingTourEnhanced } from "@/components/onboarding-tour-state";
 import { Toast, ToastContainer } from "@/components/ui/toast";
 import { ConfirmationDialog } from "@/components/ui/confirmation-dialog";
 import { LoadingSpinner } from "@/components/ui/loading-spinner";
@@ -66,6 +66,19 @@ import type {
 } from "./app-client.types";
 
 import { UserSettingsProvider } from "@/components/providers/user-settings-provider";
+
+const AnalyticsPage = dynamic(() => import("@/components/pages/analytics"), {
+    loading: () => (
+        <div className="flex items-center justify-center py-20">
+            <LoadingSpinner size="lg" />
+        </div>
+    ),
+});
+
+const OnboardingTourEnhanced = dynamic(
+    () => import("@/components/onboarding-tour-enhanced").then((mod) => mod.OnboardingTourEnhanced),
+    { ssr: false }
+);
 
 export function AppClient({
     initialSubscriptions,
