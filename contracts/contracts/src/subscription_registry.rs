@@ -62,6 +62,8 @@ pub struct Subscription {
     pub status: SubscriptionStatus,
     /// Optional linked escrow id used for pending funds cleanup on cancel.
     pub escrow_id: Option<u64>,
+    /// Timestamp after which escrowed funds can be refunded to the payer.
+    pub escrow_expires_at: Option<u64>,
 }
 
 #[contracttype]
@@ -79,6 +81,12 @@ pub enum DataKey {
     Admin,
     /// Tracks whether a pending token allowance remains for a subscription.
     PendingAllowance(BytesN<32>),
+    /// Platform fee percentage (basis points, e.g. 250 = 2.5%).
+    PlatformFeeBps,
+    /// Whether the contract is paused.
+    Paused,
+    /// Escrow expiration timestamp per subscription.
+    EscrowExpiresAt(BytesN<32>),
     /// Tracks nonces for delegated renewal to prevent replay attacks.
     Nonce(Address),
     /// Contract address for the Virtual Card integration.
@@ -138,6 +146,27 @@ pub struct SubscriptionRenewedEvent {
     pub next_renewal_date: u64,
 }
 
+#[contractevent]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct EscrowRefundedEvent {
+    pub subscription_id: BytesN<32>,
+    pub user: Address,
+    pub amount: i128,
+}
+
+#[contractevent]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct FeeUpdatedEvent {
+    pub old_fee_bps: u32,
+    pub new_fee_bps: u32,
+}
+
+#[contractevent]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ContractPausedEvent {
+    pub paused: bool,
+}
+
 #[contract]
 pub struct SubscriptionRegistry;
 
@@ -152,6 +181,18 @@ impl SubscriptionRegistry {
         env.storage().instance().set(&DataKey::Admin, &admin);
     }
 
+    /// Initialize contract with admin and platform fee. Callable once.
+    pub fn initialize(env: Env, admin: Address, fee_bps: u32) {
+        if env.storage().instance().has(&DataKey::Admin) {
+            panic!("already initialized");
+        }
+        admin.require_auth();
+        assert!(fee_bps <= 10_000, "fee_bps must be <= 10000");
+        env.storage().instance().set(&DataKey::Admin, &admin);
+        env.storage().instance().set(&DataKey::PlatformFeeBps, &fee_bps);
+        env.storage().instance().set(&DataKey::Paused, &false);
+    }
+
     fn is_admin(env: &Env, caller: &Address) -> bool {
         env.storage()
             .instance()
@@ -160,12 +201,162 @@ impl SubscriptionRegistry {
             .unwrap_or(false)
     }
 
+    fn require_admin(env: &Env, caller: &Address) {
+        if !Self::is_admin(env, caller) {
+            panic!("not admin");
+        }
+    }
+
+    fn require_not_paused(env: &Env) {
+        let paused: bool = env.storage().instance().get(&DataKey::Paused).unwrap_or(false);
+        if paused {
+            panic!("contract is paused");
+        }
+    }
+
+    /// Update platform fee (admin only). Fee in basis points (e.g. 250 = 2.5%).
+    pub fn set_fee(env: Env, caller: Address, new_fee_bps: u32) {
+        caller.require_auth();
+        Self::require_admin(&env, &caller);
+        assert!(new_fee_bps <= 10_000, "fee_bps must be <= 10000");
+        let old_fee: u32 = env.storage().instance().get(&DataKey::PlatformFeeBps).unwrap_or(0);
+        env.storage().instance().set(&DataKey::PlatformFeeBps, &new_fee_bps);
+        FeeUpdatedEvent { old_fee_bps: old_fee, new_fee_bps }.publish(&env);
+    }
+
+    /// Pause or unpause the contract (admin only).
+    pub fn pause_contract(env: Env, caller: Address, paused: bool) {
+        caller.require_auth();
+        Self::require_admin(&env, &caller);
+        env.storage().instance().set(&DataKey::Paused, &paused);
+        ContractPausedEvent { paused }.publish(&env);
+    }
+
+    /// Check if contract is paused.
+    pub fn is_paused(env: Env) -> bool {
+        env.storage().instance().get(&DataKey::Paused).unwrap_or(false)
+    }
+
+    /// Get current platform fee in basis points.
+    pub fn get_platform_fee(env: Env) -> u32 {
+        env.storage().instance().get(&DataKey::PlatformFeeBps).unwrap_or(0)
+    }
+
+    /// Refund escrowed funds if the merchant did not claim before expiry.
+    /// Only the original payer (user) or admin can trigger.
+    pub fn refund_expired_escrow(env: Env, subscription_id: BytesN<32>, caller: Address) {
+        caller.require_auth();
+
+        let mut subscription: Subscription = env
+            .storage()
+            .persistent()
+            .get(&DataKey::CoreSubscription(subscription_id.clone()))
+            .unwrap_or_else(|| panic!("subscription not found"));
+
+        let authorized = caller == subscription.user || Self::is_admin(&env, &caller);
+        if !authorized {
+            panic!("unauthorized refund");
+        }
+
+        let expires_at = subscription.escrow_expires_at.unwrap_or(0);
+        let now = env.ledger().timestamp();
+        if now < expires_at {
+            panic!("escrow has not expired");
+        }
+
+        let escrow_id = subscription.escrow_id.unwrap_or_else(|| panic!("no escrow linked"));
+        let _ = escrow_id; // escrow_id tracked for cross-contract integration
+
+        // Transfer funds back to user.
+        let token_client = token::Client::new(&env, &subscription.token);
+        token_client.transfer(
+            &env.current_contract_address(),
+            &subscription.user,
+            &subscription.amount,
+        );
+
+        // Clear escrow linkage and mark refunded by setting status to Canceled.
+        subscription.escrow_id = None;
+        subscription.escrow_expires_at = None;
+        subscription.status = SubscriptionStatus::Canceled;
+        env.storage().persistent().set(
+            &DataKey::CoreSubscription(subscription_id.clone()),
+            &subscription,
+        );
+
+        // Clean up stored expiration.
+        env.storage()
+            .persistent()
+            .remove(&DataKey::EscrowExpiresAt(subscription_id.clone()));
+
+        EscrowRefundedEvent {
+            subscription_id,
+            user: subscription.user,
+            amount: subscription.amount,
+        }
+        .publish(&env);
+    }
+
+    /// Set escrow expiration for a subscription (admin only).
+    pub fn set_escrow_expiration(
+        env: Env,
+        caller: Address,
+        subscription_id: BytesN<32>,
+        expires_at: u64,
+    ) {
+        caller.require_auth();
+        Self::require_admin(&env, &caller);
+
+        let mut subscription: Subscription = env
+            .storage()
+            .persistent()
+            .get(&DataKey::CoreSubscription(subscription_id.clone()))
+            .unwrap_or_else(|| panic!("subscription not found"));
+
+        subscription.escrow_expires_at = Some(expires_at);
+        env.storage().persistent().set(
+            &DataKey::CoreSubscription(subscription_id.clone()),
+            &subscription,
+        );
+        env.storage()
+            .persistent()
+            .set(&DataKey::EscrowExpiresAt(subscription_id), &expires_at);
+    }
+
+    /// Safe transfer from subscriber to merchant. Returns true on success.
+    fn safe_transfer_from(
+        env: &Env,
+        token: &Address,
+        from: &Address,
+        to: &Address,
+        amount: i128,
+    ) -> bool {
+        let token_client = token::Client::new(env, token);
+        token_client.transfer_from(
+            &env.current_contract_address(),
+            from,
+            to,
+            &amount,
+        );
+        true
+    }
+
+    /// Safe direct transfer (from contract to recipient). Returns true on success.
+    fn safe_transfer(
+        env: &Env,
+        token: &Address,
+        to: &Address,
+        amount: i128,
+    ) -> bool {
+        let token_client = token::Client::new(env, token);
+        token_client.transfer(&env.current_contract_address(), to, &amount);
+        true
+    }
+
     /// Set the Virtual Card Contract address for cross-contract funding. Admin only.
     pub fn set_virtual_card_contract(env: Env, caller: Address, contract_address: Address) {
         caller.require_auth();
-        if !Self::is_admin(&env, &caller) {
-            panic!("unauthorized");
-        }
+        Self::require_admin(&env, &caller);
         env.storage()
             .instance()
             .set(&DataKey::VirtualCardContract, &contract_address);
@@ -183,6 +374,7 @@ impl SubscriptionRegistry {
         amount: i128,
         interval: u64,
     ) -> BytesN<32> {
+        Self::require_not_paused(&env);
         user.require_auth();
 
         if user == merchant {
@@ -229,6 +421,7 @@ impl SubscriptionRegistry {
             created_at: now,
             status: SubscriptionStatus::Active,
             escrow_id: None,
+            escrow_expires_at: None,
         };
 
         env.storage()
@@ -285,6 +478,7 @@ impl SubscriptionRegistry {
     }
 
     fn execute_renewal(env: &Env, subscription_id: &BytesN<32>) {
+        Self::require_not_paused(env);
         let mut subscription: Subscription = env
             .storage()
             .persistent()
@@ -437,6 +631,7 @@ impl SubscriptionRegistry {
         next_renewal: u64,
         encrypted_blob: Bytes,
     ) -> BytesN<32> {
+        Self::require_not_paused(&env);
         user.require_auth();
         if billing_interval == 0 {
             panic!("billing_interval must be greater than 0");
