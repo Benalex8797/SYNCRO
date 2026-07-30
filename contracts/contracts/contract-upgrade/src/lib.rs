@@ -231,6 +231,7 @@ impl ContractUpgradeGovernance {
 
     pub fn set_guardians(env: Env, new_guardians: Vec<Address>) {
         Self::require_admin(&env);
+        Self::require_not_paused(&env);
         let count = new_guardians.len();
         if count < 2 || count > 3 { panic_with_error!(&env, UpgradeError::InvalidArgument); }
         for i in 0..count {
