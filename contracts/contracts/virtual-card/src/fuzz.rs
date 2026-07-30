@@ -6,14 +6,13 @@ use soroban_sdk::{
     testutils::{Address as _, EnvTestConfig, Ledger},
     Address, Env, String,
 };
-use std::panic::{catch_unwind, AssertUnwindSafe};
+// removed unused panic helpers
 
 use super::{CardStatus, CardType, VirtualCardContract, VirtualCardContractClient};
 
 fn fuzz_env() -> Env {
     Env::new_with_config(EnvTestConfig {
         capture_snapshot_at_drop: false,
-        ..EnvTestConfig::default()
     })
 }
 
