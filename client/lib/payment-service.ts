@@ -3,12 +3,12 @@ import { createClient } from "./supabase/server"
 import { getStripeInstance } from "./stripe-config"
 import { getPayPalService } from "./paypal-service"
 import { getPaystackService } from "./paystack-service"
-import { isPaymentProviderEnabled } from "./feature-flags"
+import { isPaymentProviderEnabled, type PaymentProvider } from "./feature-flags"
 import { emitAuditEvent } from "./api/audit"
 import { logger } from "./logger"
 
 export interface PaymentConfig {
-  provider: "stripe" | "paypal" | "mock" | "paystack"
+  provider: PaymentProvider
   apiKey?: string
 }
 
@@ -40,12 +40,32 @@ export interface PaymentResult {
   needsReconciliation?: boolean
 }
 
+/** Metadata attached to payment processing and persisted with the payment row. */
+export interface PaymentMetadata {
+  userId?: string
+  userEmail?: string
+  planName?: string
+  [key: string]: string | number | boolean | null | undefined
+}
+
+export interface PaymentRecord {
+  amount: number
+  currency: string
+  status: "succeeded" | "pending" | "refunded" | "failed"
+  provider: PaymentProvider | string
+  transaction_id: string
+  metadata?: PaymentMetadata
+  user_id?: string
+  plan_name?: string
+  updated_at?: string
+}
+
 export type PaymentPersistenceResult =
   | { ok: true }
   | { ok: false; error: string }
 
 export class PaymentService {
-  private provider: string
+  private provider: PaymentProvider
   private stripe: Stripe | null = null
 
   constructor(config: PaymentConfig) {
@@ -59,10 +79,10 @@ export class PaymentService {
     amount: number,
     currency: string = "usd",
     paymentMethodId: string,
-    metadata: any = {}
+    metadata: PaymentMetadata = {}
   ): Promise<PaymentResult> {
     // Validate provider is enabled
-    if (!isPaymentProviderEnabled(this.provider as any)) {
+    if (!isPaymentProviderEnabled(this.provider)) {
       return {
         success: false,
         transactionId: "",
@@ -190,11 +210,11 @@ export class PaymentService {
         success: paymentIntent.status === "succeeded",
         transactionId: paymentIntent.id,
       }
-    } catch (error: any) {
+    } catch (error: unknown) {
       return {
         success: false,
         transactionId: "",
-        error: error.message,
+        error: error instanceof Error ? error.message : "Stripe payment failed",
       }
     }
   }
@@ -203,7 +223,7 @@ export class PaymentService {
     amount: number,
     currency: string,
     paymentMethodId: string,
-    metadata: any = {}
+    metadata: PaymentMetadata = {}
   ): Promise<PaymentResult> {
     const paypalService = getPayPalService()
 
@@ -312,7 +332,7 @@ export class PaymentService {
     amount: number,
     _currency: string,
     paymentMethodId: string,
-    metadata: any = {}
+    metadata: PaymentMetadata = {}
   ): Promise<PaymentResult> {
     const paystackService = getPaystackService()
 
@@ -348,7 +368,7 @@ export class PaymentService {
       const appUrl = process.env.NEXT_PUBLIC_APP_URL || 'http://localhost:3000'
 
       const init = await paystackService.initializeTransaction({
-        email: metadata.userEmail,
+        email: metadata.userEmail ?? "",
         amountKobo: Math.round(amount * 100), // convert to kobo (100 kobo = ₦1)
         reference,
         metadata: {
@@ -393,7 +413,7 @@ export class PaymentService {
   }
 
   private async savePaymentToDatabase(
-    paymentData: Record<string, unknown> & { transaction_id: string }
+    paymentData: PaymentRecord
   ): Promise<PaymentPersistenceResult> {
     try {
       const supabase = await createClient()
