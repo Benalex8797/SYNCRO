@@ -139,7 +139,7 @@ router.get('/privacy-metrics', async (_req: AuthenticatedRequest, res: Response)
  * Sanitizes a CSV cell to prevent formula injection.
  * Cells starting with =, +, -, @, tab, or carriage return are prefixed with a single quote.
  */
-function sanitizeCSVCell(value: any): string {
+function sanitizeCSVCell(value: unknown): string {
   if (value === null || value === undefined) return '';
   
   const stringValue = String(value);
