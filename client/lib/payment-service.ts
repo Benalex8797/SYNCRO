@@ -4,6 +4,7 @@ import { getStripeInstance } from "./stripe-config"
 import { getPayPalService } from "./paypal-service"
 import { getPaystackService } from "./paystack-service"
 import { isPaymentProviderEnabled, type PaymentProvider } from "./feature-flags"
+import { randomUUID } from "crypto"
 import { emitAuditEvent } from "./api/audit"
 import { logger } from "./logger"
 
@@ -95,7 +96,7 @@ export class PaymentService {
 
     try {
       if (this.provider === "stripe") {
-        result = await this.processStripePayment(amount, currency, paymentMethodId)
+        result = await this.processStripePayment(amount, currency, paymentMethodId, metadata)
       } else if (this.provider === "paypal") {
         result = await this.processPayPalPayment(amount, currency, paymentMethodId, metadata)
       } else if (this.provider === "paystack") {
@@ -188,13 +189,22 @@ export class PaymentService {
   private async processStripePayment(
     amount: number,
     currency: string,
-    paymentMethodId: string
+    paymentMethodId: string,
+    metadata: any = {}
   ): Promise<PaymentResult> {
     if (!this.stripe) {
       return { success: false, transactionId: "", error: "Stripe not configured" }
     }
 
     try {
+      // Sanitize metadata to only allowed non-sensitive fields
+      const allowedKeys = ["userId", "planName", "requestId"]
+      const sanitized: any = {}
+      for (const key of allowedKeys) {
+        if (metadata[key]) sanitized[key] = metadata[key]
+      }
+      // Ensure a correlation requestId exists
+      if (!sanitized.requestId) sanitized.requestId = randomUUID()
       const paymentIntent = await this.stripe.paymentIntents.create({
         amount: Math.round(amount * 100), // Convert to cents
         currency,
@@ -205,6 +215,7 @@ export class PaymentService {
           enabled: true,
           allow_redirects: "never",
         },
+        metadata: sanitized,
       })
 
       switch (paymentIntent.status) {
