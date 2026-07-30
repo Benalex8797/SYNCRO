@@ -92,6 +92,55 @@ describe("PaymentService", () => {
       expect(result.success).toBe(false)
       expect(result.error).toBe("Stripe not configured")
     })
+
+    it("should map requires_action to requiresAction with clientSecret", async () => {
+      const service = new PaymentService({ provider: "stripe" })
+
+      stripe.paymentIntents.create.mockResolvedValue({
+        id: "pi_act",
+        status: "requires_action",
+        client_secret: "pi_act_secret_abc123",
+      })
+
+      const result = await service.processPayment(100, "usd", "pm_act")
+
+      expect(result.success).toBe(true)
+      expect(result.requiresAction).toBe(true)
+      expect(result.clientSecret).toBe("pi_act_secret_abc123")
+      expect(result.transactionId).toBe("pi_act")
+    })
+
+    it("should map requires_confirmation to requiresAction with clientSecret", async () => {
+      const service = new PaymentService({ provider: "stripe" })
+
+      stripe.paymentIntents.create.mockResolvedValue({
+        id: "pi_conf",
+        status: "requires_confirmation",
+        client_secret: "pi_conf_secret_def456",
+      })
+
+      const result = await service.processPayment(100, "usd", "pm_conf")
+
+      expect(result.success).toBe(true)
+      expect(result.requiresAction).toBe(true)
+      expect(result.clientSecret).toBe("pi_conf_secret_def456")
+      expect(result.transactionId).toBe("pi_conf")
+    })
+
+    it("should surface an unknown PaymentIntent status as a failure", async () => {
+      const service = new PaymentService({ provider: "stripe" })
+
+      stripe.paymentIntents.create.mockResolvedValue({
+        id: "pi_unknown",
+        status: "processing",
+      })
+
+      const result = await service.processPayment(100, "usd", "pm_unknown")
+
+      expect(result.success).toBe(false)
+      expect(result.error).toContain("processing")
+      expect(result.transactionId).toBe("pi_unknown")
+    })
   })
 
   // ─── PayPal ────────────────────────────────────────────────────────────────
