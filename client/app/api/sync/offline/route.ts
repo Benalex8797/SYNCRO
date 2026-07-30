@@ -1,136 +1,109 @@
 import { type NextRequest } from "next/server"
+import { createClient } from "@/lib/supabase/server"
 import {
+  ApiException,
+  ApiErrors,
+  RateLimiters,
   createAuthenticatedApiRoute,
   createSuccessResponse,
-  ApiErrors,
-  ApiException,
+  validateRequestBody,
 } from "@/lib/api/index"
-import { createClient } from "@/lib/supabase/server"
-import { trackError } from "@/lib/telemetry"
 import { ErrorCode, HttpStatus } from "@/lib/api/types"
+import {
+  offlineMutationSchema,
+  type OfflineMutation,
+  type SyncConflictDetails,
+} from "@/lib/sync/offline-mutations"
+import { trackError } from "@/lib/telemetry"
 
-/**
- * Fields that are always server-owned. Clients must not supply these on create.
- * On update, `id` is allowed only as a lookup key and is never written back.
- */
-const ALWAYS_PROTECTED = ["user_id", "created_at", "updated_at"] as const
-const CREATE_PROTECTED = [...ALWAYS_PROTECTED, "id"] as const
+const PROTECTED_UPDATE_FIELDS = new Set([
+  "user_id",
+  "created_at",
+  "deleted_at",
+  "status",
+])
 
-function findPresentFields(
-  payload: Record<string, unknown>,
-  fields: readonly string[]
-): string[] {
-  return fields.filter((field) =>
-    Object.prototype.hasOwnProperty.call(payload, field)
-  )
-}
+const ALLOWED_UPDATE_FIELDS = new Set([
+  "name",
+  "category",
+  "price",
+  "icon",
+  "renews_in",
+  "color",
+  "renewal_url",
+  "tags",
+  "email_account_id",
+  "has_api_key",
+  "is_trial",
+  "trial_ends_at",
+  "price_after_trial",
+  "source",
+  "manually_edited",
+  "edited_fields",
+  "pricing_type",
+  "billing_cycle",
+  "active_until",
+  "paused_at",
+  "resumes_at",
+  "price_range",
+  "price_history",
+])
 
-function assertNoProtectedFields(
-  payload: Record<string, unknown>,
-  fields: readonly string[]
-): void {
-  const present = findPresentFields(payload, fields)
-  if (present.length > 0) {
-    throw ApiErrors.validationError(
-      `Payload must not include protected fields: ${present.join(", ")}`,
-      present[0],
-      { protectedFields: present }
-    )
-  }
-}
-
-function omitFields(
-  payload: Record<string, unknown>,
-  fields: readonly string[]
-): Record<string, unknown> {
-  const sanitized = { ...payload }
-  for (const field of fields) {
-    delete sanitized[field]
-  }
-  return sanitized
-}
-
-async function resolveConflict(
+// Last-write-wins with version tracking: the newer version becomes the base,
+// and the merged row is offered back to the client inside the 409 details.
+function resolveConflict(
   existingSubscription: Record<string, unknown>,
   updates: Record<string, unknown>
-): Promise<Record<string, unknown>> {
-  const existingVersion = Number(existingSubscription.version) || 0
-  const updateVersion = Number(updates.version) || 0
-
-  if (existingVersion > updateVersion) {
-    return {
-      ...updates,
-      _conflict: true,
-      _serverData: existingSubscription,
-    }
-  }
+): SyncConflictDetails {
+  const serverVersion = Number(existingSubscription.version) || 0
+  const clientVersion = Number(updates.version) || 0
 
   return {
-    ...existingSubscription,
-    ...updates,
-    version: Math.max(existingVersion, updateVersion) + 1,
+    conflict: true,
+    serverVersion,
+    clientVersion,
+    serverData: existingSubscription,
+    resolvedData: {
+      ...existingSubscription,
+      ...updates,
+      version: Math.max(serverVersion, clientVersion) + 1,
+    },
   }
 }
 
 export const POST = createAuthenticatedApiRoute(
   async (request: NextRequest, context, user) => {
-    let mutation: { type?: string; payload?: Record<string, unknown> }
-    try {
-      mutation = await request.json()
-    } catch {
-      throw ApiErrors.validationError("Invalid JSON body")
-    }
-
-    const { type, payload } = mutation
-
-    if (!type || typeof type !== "string") {
-      throw ApiErrors.validationError("Mutation type is required", "type")
-    }
-
-    if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
-      throw ApiErrors.validationError("Mutation payload is required", "payload")
-    }
-
+    const mutation: OfflineMutation = await validateRequestBody(
+      request,
+      offlineMutationSchema
+    )
     const supabase = await createClient()
 
     try {
-      if (type === "create") {
-        assertNoProtectedFields(payload, CREATE_PROTECTED)
-
+      if (mutation.type === "create") {
         const { data, error } = await supabase
           .from("subscriptions")
-          .insert({
-            ...omitFields(payload, CREATE_PROTECTED),
-            // Server-owned — assigned after all client fields
-            user_id: user.id,
-          })
+          .insert({ user_id: user.id, ...mutation.payload })
           .select()
           .single()
 
-        if (error) {
-          throw ApiErrors.validationError(error.message)
-        }
-
-        return createSuccessResponse(
-          { success: true, data },
-          HttpStatus.OK,
-          context.requestId
-        )
+        if (error) throw ApiErrors.validationError(error.message)
+        return createSuccessResponse(data, HttpStatus.OK, context.requestId)
       }
 
-      if (type === "update") {
-        assertNoProtectedFields(payload, ALWAYS_PROTECTED)
+      if (mutation.type === "update") {
+        const { id, version, ...rest } = mutation.payload
+        const protectedFields = Object.keys(rest).filter(field =>
+          PROTECTED_UPDATE_FIELDS.has(field)
+        )
 
-        const id = payload.id
-        if (!id || typeof id !== "string") {
-          throw ApiErrors.validationError("Subscription id is required", "id")
+        if (protectedFields.length > 0) {
+          throw ApiErrors.validationError(
+            "Cannot update protected fields",
+            protectedFields[0],
+            { fields: protectedFields }
+          )
         }
-
-        // Never write id / ownership / timestamps from the client
-        const updatePayload = omitFields(payload, [
-          ...ALWAYS_PROTECTED,
-          "id",
-        ])
 
         const { data: existing, error: fetchError } = await supabase
           .from("subscriptions")
@@ -138,82 +111,61 @@ export const POST = createAuthenticatedApiRoute(
           .eq("id", id)
           .eq("user_id", user.id)
           .single()
-
         if (fetchError && fetchError.code === "PGRST116") {
           throw ApiErrors.notFound("Subscription")
         }
+        if (fetchError) throw ApiErrors.validationError(fetchError.message)
 
-        if (fetchError) {
-          throw ApiErrors.validationError(fetchError.message)
-        }
-
-        if (
-          payload.version != null &&
-          existing.version != null &&
-          Number(payload.version) < Number(existing.version)
-        ) {
-          const resolved = await resolveConflict(existing, updatePayload)
+        // Optimistic locking: reject stale client versions with the
+        // documented conflict contract (see lib/sync/offline-mutations.ts).
+        if (version && existing.version && version < existing.version) {
           throw new ApiException(
             ErrorCode.CONFLICT,
             "Conflict detected",
             HttpStatus.CONFLICT,
-            { conflict: true, resolvedData: resolved }
+            resolveConflict(existing, mutation.payload)
           )
         }
 
+        if (version && version > (existing.version || 0) + 1) {
+          throw ApiErrors.validationError("Invalid version for update", "version")
+        }
+
+        const safeUpdates = Object.fromEntries(
+          Object.entries(rest).filter(([field]) => ALLOWED_UPDATE_FIELDS.has(field))
+        )
+
         const { data, error } = await supabase
           .from("subscriptions")
-          .update({
-            ...updatePayload,
-            version: (Number(existing.version) || 0) + 1,
-            user_id: user.id,
-          })
+          .update({ ...safeUpdates, version: (existing.version || 0) + 1 })
           .eq("id", id)
           .eq("user_id", user.id)
           .select()
           .single()
 
-        if (error) {
-          throw ApiErrors.validationError(error.message)
-        }
-
-        return createSuccessResponse(
-          { success: true, data },
-          HttpStatus.OK,
-          context.requestId
-        )
+        if (error) throw ApiErrors.validationError(error.message)
+        return createSuccessResponse(data, HttpStatus.OK, context.requestId)
       }
 
-      if (type === "delete") {
-        const id = payload.id
-        if (!id || typeof id !== "string") {
-          throw ApiErrors.validationError("Subscription id is required", "id")
-        }
+      const { error } = await supabase
+        .from("subscriptions")
+        .delete()
+        .eq("id", mutation.payload.id)
+        .eq("user_id", user.id)
 
-        const { error } = await supabase
-          .from("subscriptions")
-          .delete()
-          .eq("id", id)
-          .eq("user_id", user.id)
-
-        if (error) {
-          throw ApiErrors.validationError(error.message)
-        }
-
-        return createSuccessResponse(
-          { success: true },
-          HttpStatus.OK,
-          context.requestId
-        )
-      }
-
-      throw ApiErrors.validationError("Unknown mutation type", "type")
+      if (error) throw ApiErrors.validationError(error.message)
+      return createSuccessResponse({ deleted: true }, HttpStatus.OK, context.requestId)
     } catch (error) {
-      if (error instanceof ApiException) {
-        throw error
-      }
-      trackError(error, "sync", { type, userId: user.id })
-      throw ApiErrors.internalError("Internal server error")
+      trackError(error, "database", {
+        component: "sync/offline",
+        userId: user.id,
+        extra: { mutationType: mutation.type, requestId: context.requestId },
+      })
+      throw error
     }
+  },
+  {
+    rateLimit: RateLimiters.standard,
+    idempotent: true,
   }
 )
