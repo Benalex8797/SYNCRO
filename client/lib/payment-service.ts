@@ -4,19 +4,45 @@ import { getStripeInstance } from "./stripe-config"
 import { getPayPalService } from "./paypal-service"
 import { getPaystackService } from "./paystack-service"
 import { isPaymentProviderEnabled } from "./feature-flags"
+import { emitAuditEvent } from "./api/audit"
+import { logger } from "./logger"
 
 export interface PaymentConfig {
   provider: "stripe" | "paypal" | "mock" | "paystack"
   apiKey?: string
 }
 
+/**
+ * Failure contract (provider success / database failure):
+ *
+ * When the payment provider reports success (or requiresAction) but the local
+ * `payments` row cannot be inserted/updated, we do **not** flip `success` to
+ * false — the charge already happened. Instead we return a degraded result:
+ *   - `success: true` (provider outcome)
+ *   - `persistenceDegraded: true`
+ *   - `needsReconciliation: true`
+ *   - `error` describing the persistence failure
+ *
+ * Callers must surface this to operators/clients and must not treat the
+ * response as fully reconciled. Structured logs + `payment.persistence_failed`
+ * audit events are emitted with `transactionId` and `requestId` so webhooks
+ * or a reconciliation job can repair state.
+ */
 export interface PaymentResult {
   success: boolean
   transactionId: string
   error?: string
   requiresAction?: boolean
   actionUrl?: string
+  /** Provider succeeded but local DB write failed */
+  persistenceDegraded?: boolean
+  /** Caller/ops should enqueue or await webhook reconciliation */
+  needsReconciliation?: boolean
 }
+
+export type PaymentPersistenceResult =
+  | { ok: true }
+  | { ok: false; error: string }
 
 export class PaymentService {
   private provider: string
@@ -63,34 +89,73 @@ export class PaymentService {
         }
       }
 
-      if (result.success && !result.requiresAction) {
-        await this.savePaymentToDatabase({
+      if (result.success || result.requiresAction) {
+        // requiresAction (PayPal/Paystack redirect or pending review) → pending
+        const dbStatus = result.requiresAction ? "pending" : "succeeded"
+
+        const persistence = await this.savePaymentToDatabase({
           amount,
           currency,
-          status: "succeeded",
+          status: dbStatus,
           provider: this.provider,
           transaction_id: result.transactionId,
           metadata,
           user_id: metadata.userId,
           plan_name: metadata.planName,
         })
-      } else if (result.requiresAction) {
-        // Save as pending — user still needs to complete the redirect flow
-        await this.savePaymentToDatabase({
-          amount,
-          currency,
-          status: "pending",
-          provider: this.provider,
-          transaction_id: result.transactionId,
-          metadata,
-          user_id: metadata.userId,
-          plan_name: metadata.planName,
-        })
+
+        if (!persistence.ok) {
+          const requestId =
+            typeof metadata.requestId === "string"
+              ? metadata.requestId
+              : undefined
+
+          logger.error("Payment persistence failed after provider success", {
+            provider: this.provider,
+            transactionId: result.transactionId,
+            requestId: requestId ?? null,
+            userId: metadata.userId ?? null,
+            persistenceError: persistence.error,
+            reconciliation: "enqueued",
+          })
+
+          emitAuditEvent({
+            userId: metadata.userId || "unknown",
+            action: "payment.persistence_failed",
+            resourceType: "payment",
+            resourceId: result.transactionId,
+            metadata: {
+              provider: this.provider,
+              requestId: requestId ?? null,
+              persistenceError: persistence.error,
+              needsReconciliation: true,
+            },
+          })
+
+          // Soft-enqueue: structured log is the reconciliation signal until a
+          // dedicated job worker exists. Webhooks remain the backup path.
+          this.enqueuePaymentReconciliation({
+            transactionId: result.transactionId,
+            provider: this.provider,
+            requestId,
+            userId: metadata.userId,
+            reason: persistence.error,
+          })
+
+          return {
+            ...result,
+            persistenceDegraded: true,
+            needsReconciliation: true,
+            error:
+              persistence.error ||
+              "Payment succeeded with provider but failed to save locally; reconciliation required",
+          }
+        }
       }
 
       return result
     } catch (error) {
-      console.error('[PaymentService] Payment processing error:', error)
+      logger.error("Payment processing error", { err: error })
       return {
         success: false,
         transactionId: "",
@@ -327,10 +392,12 @@ export class PaymentService {
     }
   }
 
-  private async savePaymentToDatabase(paymentData: any) {
+  private async savePaymentToDatabase(
+    paymentData: Record<string, unknown> & { transaction_id: string }
+  ): Promise<PaymentPersistenceResult> {
     try {
       const supabase = await createClient()
-      
+
       // Check if payment already exists (idempotency)
       const { data: existing } = await supabase
         .from("payments")
@@ -339,7 +406,9 @@ export class PaymentService {
         .single()
 
       if (existing) {
-        console.log('[PaymentService] Payment already exists, updating:', paymentData.transaction_id)
+        logger.info("Payment already exists, updating", {
+          transactionId: paymentData.transaction_id,
+        })
         const { error } = await supabase
           .from("payments")
           .update({
@@ -347,18 +416,52 @@ export class PaymentService {
             updated_at: new Date().toISOString(),
           })
           .eq("transaction_id", paymentData.transaction_id)
-        
-        if (error) throw error
+
+        if (error) {
+          return { ok: false, error: `Payment update failed: ${error.message}` }
+        }
       } else {
-        console.log('[PaymentService] Creating new payment record:', paymentData.transaction_id)
+        logger.info("Creating new payment record", {
+          transactionId: paymentData.transaction_id,
+        })
         const { error } = await supabase.from("payments").insert(paymentData)
-        if (error) throw error
+        if (error) {
+          return { ok: false, error: `Payment insert failed: ${error.message}` }
+        }
       }
+
+      return { ok: true }
     } catch (error) {
-      console.error("[PaymentService] Failed to save payment to database:", error)
-      // We don't want to fail the whole payment if only the logging fails.
-      // Webhooks are the reliable source of truth for payment status.
+      const message =
+        error instanceof Error ? error.message : "Unknown persistence error"
+      logger.error("Failed to save payment to database", {
+        err: error,
+        transactionId: paymentData.transaction_id,
+      })
+      return { ok: false, error: message }
     }
+  }
+
+  /**
+   * Soft-enqueue reconciliation work. Until a durable queue exists, this emits
+   * a structured log line that ops/alerting can pick up; webhooks remain the
+   * primary repair path.
+   */
+  private enqueuePaymentReconciliation(job: {
+    transactionId: string
+    provider: string
+    requestId?: string
+    userId?: string
+    reason: string
+  }): void {
+    logger.warn("payment.reconciliation_enqueued", {
+      queue: "payment_reconciliation",
+      transactionId: job.transactionId,
+      provider: job.provider,
+      requestId: job.requestId ?? null,
+      userId: job.userId ?? null,
+      reason: job.reason,
+    })
   }
 
   async refundPayment(transactionId: string): Promise<PaymentResult> {

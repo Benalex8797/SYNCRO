@@ -2,8 +2,8 @@
 
 import { ArrowRight, Lock, LockOpen, Mail, Sparkles, Package } from "lucide-react"
 import { useState } from "react"
+import dynamic from "next/dynamic"
 import { TrialSection } from "./trial-section"
-import { SubscriptionForecastChart } from "@/components/subscription-forecast-chart"
 import { formatCurrency, convertCurrency, type Currency } from "@/lib/currency-utils"
 import { formatDate, formatDateTime, getDaysDifference } from "@/lib/timezone-utils"
 import { useUserSettings } from "@/components/providers/user-settings-provider"
@@ -25,6 +25,13 @@ export type {
   DuplicateGroup,
   UnusedSubscription,
 }
+
+const SubscriptionForecastChart = dynamic(
+  () => import("@/components/subscription-forecast-chart").then((mod) => mod.SubscriptionForecastChart),
+  {
+    loading: () => <Skeleton className="h-80 w-full rounded-xl" />,
+  }
+)
 
 // ── Props ─────────────────────────────────────────────────────────────────────
 
