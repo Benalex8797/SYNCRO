@@ -439,6 +439,10 @@ impl SubscriptionRenewalContract {
 
     /// Release a processing lock for a subscription renewal.
     pub fn release_renewal_lock(env: Env, sub_id: u64) {
+        if Self::is_paused(env.clone()) {
+            panic!("Protocol is paused");
+        }
+
         let lock_key = PersistentKey::RenewalLock(sub_id);
         if !env.storage().persistent().has(&lock_key) {
             panic!("No renewal lock to release");
@@ -472,6 +476,9 @@ impl SubscriptionRenewalContract {
         spending_cap: i128,
         sub_id: u64,
     ) {
+        if Self::is_paused(env.clone()) {
+            panic!("Protocol is paused");
+        }
         owner.require_auth();
 
         let mut integrity_data = soroban_sdk::Vec::<soroban_sdk::Val>::new(&env);
@@ -557,6 +564,10 @@ impl SubscriptionRenewalContract {
 
     /// Explicitly cancel a subscription
     pub fn cancel_sub(env: Env, sub_id: u64) {
+        if Self::is_paused(env.clone()) {
+            panic!("Protocol is paused");
+        }
+
         let key = PersistentKey::Subscription(sub_id);
         let mut data: SubscriptionData = env
             .storage()
@@ -624,6 +635,10 @@ impl SubscriptionRenewalContract {
         max_spend: i128,
         expires_at: u32,
     ) {
+        if Self::is_paused(env.clone()) {
+            panic!("Protocol is paused");
+        }
+
         let sub_key = PersistentKey::Subscription(sub_id);
         let data: SubscriptionData = env
             .storage()
