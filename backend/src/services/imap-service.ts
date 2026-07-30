@@ -6,6 +6,7 @@ import { metadataExtractionOnly } from './email-scanner'
 import type { RawScanResult, ReceiptMetadata } from './email-scanner'
 import { EXTERNAL_SERVICE_POLICIES } from '../config/external-services'
 import { encrypt, decrypt } from '../utils/encryption'
+import logger from '../config/logger'
 
 // Provider-specific IMAP configs
 const PROVIDER_CONFIGS: Record<string, { host: string; port: number; secure: boolean }> = {
