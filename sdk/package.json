@@ -1,6 +1,6 @@
 {
   "name": "@syncro/sdk",
-  "version": "1.1.0",
+  "version": "1.2.0",
   "description": "Official SDK for the SYNCRO Subscription Management Platform",
   "packageManager": "npm@10.9.2",
   "type": "module",
@@ -144,7 +144,7 @@
   "author": "SYNCRO",
   "license": "MIT",
   "dependencies": {
-    "@syncro/shared": "1.0.0",
+    "@syncro/shared": "1.1.0",
     "axios": "^1.13.5",
     "events": "^3.3.0"
   },
